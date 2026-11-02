@@ -152,6 +152,12 @@ function findTab(id) {
   return allTabs().find((t) => t.id === id);
 }
 
+// The tab on screen: the saved one, or the first tab when nothing valid is saved yet
+// (a phone opening this patient for the first time, e.g. an attendant, still has the default "1").
+function currentTab() {
+  return findTab(local.activeTab) ?? allTabs()[0];
+}
+
 function isDueToday(tab) {
   if (tab.everyDays <= 1) return true;
   const elapsed = daysBetween(tab.startDate, todayStr());
@@ -401,7 +407,7 @@ function render() {
 
   const tabs = allTabs();
   // Don't overwrite the saved tab: a just-added medicine may not be in the snapshot yet.
-  const tab = tabs.find((t) => t.id === local.activeTab) ?? tabs[0];
+  const tab = currentTab();
 
   els.patientName.textContent = shared.patient.name;
   const id = shared.patient.pid ? `PID ${shared.patient.pid}` : shared.patient.code ? `ID ${shared.patient.code}` : "";
@@ -844,7 +850,7 @@ els.addForm.addEventListener("submit", (e) => {
 });
 
 els.removeBtn.addEventListener("click", () => {
-  const tab = findTab(local.activeTab);
+  const tab = currentTab();
   if (!tab) return;
   if (!confirm(`Remove ${tab.name}? It will disappear for all nurses.`)) return;
   removeMedicine(tab);
@@ -866,7 +872,7 @@ function hideOverlay(el) {
 
 // ---------- Rename ----------
 els.renameBtn.addEventListener("click", () => {
-  const tab = findTab(local.activeTab);
+  const tab = currentTab();
   if (!tab) return;
   els.renameInput.value = tab.name;
   showOverlay(els.rename);
@@ -875,7 +881,7 @@ els.renameBtn.addEventListener("click", () => {
 
 els.renameForm.addEventListener("submit", (e) => {
   e.preventDefault();
-  const tab = findTab(local.activeTab);
+  const tab = currentTab();
   const name = els.renameInput.value.trim();
   if (!name) return;
   if (tab && name !== tab.name) updateTabField(tab, "name", name);
@@ -906,7 +912,7 @@ function renderNotes() {
 }
 
 function openNotes() {
-  notesTabId = local.activeTab;
+  notesTabId = currentTab()?.id;
   notesEditing = false;
   renderNotes();
   showOverlay(els.notes);
@@ -995,7 +1001,7 @@ function scheduleChanges(tab) {
 }
 
 function openSchedule() {
-  scheduleTabId = local.activeTab;
+  scheduleTabId = currentTab()?.id;
   scheduleEditing = false;
   renderSchedule();
   showOverlay(els.schedule);
