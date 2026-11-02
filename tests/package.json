@@ -1,0 +1,13 @@
+{
+  "name": "medicine-tracker-tests",
+  "private": true,
+  "description": "Browser tests for the Medicine Tracker. Not deployed; the app itself has no build step.",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@axe-core/playwright": "4.10.1",
+    "@playwright/test": "1.49.1",
+    "html-validate": "8.29.0"
+  }
+}

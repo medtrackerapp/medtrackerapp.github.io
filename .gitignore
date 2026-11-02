@@ -7,3 +7,7 @@ _site/
 # Private Claude context, kept local
 PROJECT_CONTEXT.txt
 CLAUDE.local.md
+
+# Playwright output
+test-results/
+playwright-report/

@@ -186,7 +186,9 @@ body.locked > .fab { display: none; }
   border-radius: 14px;
   border: 1.5px solid var(--red-border);
   background: var(--red-soft);
-  color: var(--red);
+  /* Plain --red on --red-soft is too faint to read (3.7:1); nudging it toward the text colour
+     darkens it in light mode and lightens it in dark mode, enough for WCAG AA (4.5:1). */
+  color: color-mix(in srgb, var(--red) 75%, var(--text));
   font-weight: 700;
   cursor: pointer;
   transition: background 0.2s, color 0.2s, border-color 0.2s, box-shadow 0.2s;
