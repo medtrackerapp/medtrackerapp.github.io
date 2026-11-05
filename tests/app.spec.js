@@ -36,6 +36,12 @@ async function useTheme(page, theme) {
   await page.waitForTimeout(400); // let the theme fade finish before checking contrast
 }
 
+// Waits for fade-ins to finish, so contrast is checked on the final colours, not mid-fade.
+async function settle(page) {
+  await page.waitForFunction(() => document.getAnimations()
+    .every((a) => a.playState !== "running" || a.effect?.getTiming().iterations === Infinity));
+}
+
 // ---------- Loading ----------
 test.describe("loading", () => {
   test("signed out: spinner gives way to the welcome screen", async ({ page }) => {
@@ -135,6 +141,7 @@ test.describe("standards", () => {
     test(`accessibility (WCAG 2.1 AA): ${screen} screen, ${theme}`, async ({ page }) => {
       await useTheme(page, theme);
       if (screen === "attendant") await page.getByRole("button", { name: "Attendant" }).click();
+      await settle(page);
       const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
       const found = results.violations.map((v) => `${v.id}: ${v.help} (${v.nodes.map((n) => n.target).join(", ")})`);
       expect(found).toEqual([]);
@@ -260,6 +267,7 @@ test.describe("medicine name suggestions", () => {
       await useTheme(page, theme);
       await input(page).pressSequentially("amlo");
       await input(page).press("ArrowDown");
+      await settle(page);
       const results = await new AxeBuilder({ page }).include("#add-screen")
         .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
       expect(results.violations.map((v) => `${v.id}: ${v.help} (${v.nodes.map((n) => n.target).join(", ")})`)).toEqual([]);

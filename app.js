@@ -747,14 +747,11 @@ function calm() {
   return matchMedia("(prefers-reduced-motion: reduce)").matches;
 }
 
-// Runs a DOM change as a View Transition where the browser has them (the active tab glides,
-// the dose cards slide in from the side you moved towards), or just runs it.
-function transition(change, direction) {
+// Runs a DOM change as a View Transition where the browser has them, so the selected tab
+// glides to its new place (style.css captures only that tab), or just runs it.
+function transition(change) {
   if (!document.startViewTransition || calm()) return change();
-  document.documentElement.dataset.slide = direction ?? "";
-  document.startViewTransition(change).finished.finally(() => {
-    delete document.documentElement.dataset.slide;
-  });
+  document.startViewTransition(change);
 }
 
 // Animates elements from where they were to where a change puts them (FLIP), so rows glide
@@ -770,13 +767,11 @@ function glide(elements, change) {
 }
 
 function selectTab(id) {
-  const tabs = visibleTabs();
-  const from = tabs.findIndex((t) => t.id === currentTab()?.id);
-  const to = tabs.findIndex((t) => t.id === id);
+  const same = currentTab()?.id === id;
   local.activeTab = id;
   saveLocal();
-  if (from === to || from < 0 || to < 0) return render();
-  transition(render, to > from ? "left" : "right");
+  if (same) return render();
+  transition(render);
 }
 
 let renderedDate = todayStr();
@@ -845,7 +840,7 @@ function render() {
   const doses = Array.from({ length: n }, (_, i) => isTaken(tab.id, i));
   const doneCount = doses.filter(Boolean).length;
   els.progressCount.textContent = due ? `${doneCount} of ${n} taken` : "Not due today";
-  els.progressFill.style.width = due ? `${(doneCount / n) * 100}%` : "0%";
+  els.progressFill.style.transform = `scaleX(${due ? doneCount / n : 0})`;
   renderHistory(tab);
   els.allDone.classList.toggle("hidden", !due || doneCount !== n);
   els.allDone.classList.toggle("celebrate", due && doneCount === n && justToggled?.startsWith(`${tab.id}_`));

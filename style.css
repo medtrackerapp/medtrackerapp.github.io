@@ -77,14 +77,14 @@ body {
   margin: 0;
   min-height: 100vh;
   font-family: "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  /* The glow scrolls with the page: pinning it (background-attachment: fixed) made phones
+     repaint the whole screen on every scroll frame */
   background:
     radial-gradient(600px 400px at 0% 0%, var(--bg-glow-1), transparent 70%),
     radial-gradient(500px 400px at 100% 10%, var(--bg-glow-2), transparent 70%),
     var(--bg);
-  background-attachment: fixed;
   color: var(--text);
   -webkit-tap-highlight-color: transparent;
-  transition: background-color 0.3s, color 0.3s;
 }
 
 button { font: inherit; color: inherit; }
@@ -317,9 +317,7 @@ body.locked > .fab { display: none; }
 .days-left.low {
   background: linear-gradient(135deg, #f04452, #ff8a4c);
   box-shadow: 0 6px 16px rgba(240, 68, 82, 0.35);
-  animation: pulse 2s ease-in-out infinite;
 }
-@keyframes pulse { 50% { transform: scale(1.05); } }
 
 /* ---------- Tabs (segmented control) ---------- */
 .tabs {
@@ -444,7 +442,6 @@ body.locked > .fab { display: none; }
   font-size: 0.85rem;
   text-align: left;
   cursor: pointer;
-  animation: rise 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .next-dose-icon { display: grid; place-items: center; color: var(--accent); }
 .next-dose-label {
@@ -548,10 +545,11 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
 .progress-track { height: 10px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
 .progress-fill {
   height: 100%;
-  width: 0;
   border-radius: inherit;
   background: linear-gradient(90deg, var(--accent), var(--accent-2));
-  transition: width 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.25s ease-out; /* stretching needs no layout, unlike animating width */
 }
 
 .all-done {
@@ -566,8 +564,9 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
   color: #fff;
   background: linear-gradient(135deg, var(--green), var(--green-2));
   box-shadow: 0 8px 22px rgba(34, 163, 90, 0.3);
-  animation: pop 0.4s cubic-bezier(0.2, 0.8, 0.2, 1.3);
 }
+/* Pops in only on the tap that finished the day, not every time the tab is opened */
+.all-done.celebrate { animation: pop 0.25s cubic-bezier(0.2, 0.8, 0.2, 1.3); }
 .all-done-icon {
   width: 26px;
   height: 26px;
@@ -577,33 +576,14 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
   background: rgba(255, 255, 255, 0.25);
 }
 @keyframes pop { from { transform: scale(0.9); opacity: 0; } }
-/* The tap that finished the day: one light sweep across the banner */
-.all-done { position: relative; overflow: hidden; }
-.all-done.celebrate::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(110deg, transparent 30%, rgba(255, 255, 255, 0.45) 50%, transparent 70%);
-  transform: translateX(-100%);
-  animation: shine 0.9s 0.15s ease-out forwards;
-}
-@keyframes shine { to { transform: translateX(100%); } }
 
-/* ---------- View Transitions (switching medicines) ---------- */
-/* The active tab glides to its new place; the dose cards slide in from the side moved towards */
+/* ---------- View Transition (switching medicines) ---------- */
+/* Only the selected tab glides to its new place. The page itself is not captured (root: none),
+   so the browser snapshots one small tab instead of the whole screen; the cards swap instantly. */
+:root { view-transition-name: none; }
 .tab.active { view-transition-name: active-tab; }
-#tracker { view-transition-name: tracker; }
-::view-transition-group(active-tab) { animation-duration: 0.28s; animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1); }
-::view-transition-old(tracker),
-::view-transition-new(tracker) { animation-duration: 0.22s; animation-timing-function: ease-out; }
-:root[data-slide="left"]::view-transition-old(tracker) { animation-name: out-left; }
-:root[data-slide="left"]::view-transition-new(tracker) { animation-name: in-right; }
-:root[data-slide="right"]::view-transition-old(tracker) { animation-name: out-right; }
-:root[data-slide="right"]::view-transition-new(tracker) { animation-name: in-left; }
-@keyframes out-left { to { transform: translateX(-24px); opacity: 0; } }
-@keyframes out-right { to { transform: translateX(24px); opacity: 0; } }
-@keyframes in-right { from { transform: translateX(24px); opacity: 0; } }
-@keyframes in-left { from { transform: translateX(-24px); opacity: 0; } }
+::view-transition { pointer-events: none; }
+::view-transition-group(active-tab) { animation-duration: 0.2s; animation-timing-function: cubic-bezier(0.2, 0.8, 0.2, 1); }
 
 .empty {
   display: grid;
@@ -616,7 +596,6 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
   background: var(--surface);
   border: 1px solid var(--border);
   box-shadow: var(--shadow);
-  animation: rise 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 .empty-icon {
   width: 64px;
@@ -660,6 +639,7 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
   box-shadow: var(--shadow);
 }
 @keyframes rise { from { transform: translateY(6px); opacity: 0; } }
+@keyframes toast-in { from { transform: translate(-50%, 6px); opacity: 0; } }
 
 .dose-toggle {
   flex: 1;
@@ -702,14 +682,25 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
 }
 .dose-toggle.taken .dose-num { background: rgba(255, 255, 255, 0.25); }
 .dose-toggle.taken .dose-title { color: #fff; }
-.dose-toggle.bump .dose-num { animation: pop 0.35s cubic-bezier(0.2, 0.8, 0.2, 1.4); }
+.dose-toggle.bump .dose-num { animation: pop 0.25s cubic-bezier(0.2, 0.8, 0.2, 1.4); }
 /* The check draws itself in on the dose that was just ticked */
-.dose-toggle.bump .check-path { stroke-dasharray: 22; stroke-dashoffset: 22; animation: draw 0.35s 0.08s ease-out forwards; }
+.dose-toggle.bump .check-path { stroke-dasharray: 22; stroke-dashoffset: 22; animation: draw 0.25s 0.05s ease-out forwards; }
 @keyframes draw { to { stroke-dashoffset: 0; } }
 /* Past its reminder time and not given: solid border and a slow pulse */
-.dose-toggle.overdue { border-style: solid; border-color: var(--red); animation: overdue 2.4s ease-in-out infinite; }
+/* The ring is drawn once and only its opacity animates, which phones do without repainting */
+.dose-toggle.overdue { position: relative; border-style: solid; border-color: var(--red); }
+.dose-toggle.overdue::after {
+  content: "";
+  position: absolute;
+  inset: -1.5px;
+  border-radius: inherit;
+  box-shadow: 0 0 0 4px var(--red-soft);
+  opacity: 0;
+  pointer-events: none;
+  animation: overdue 2.4s ease-in-out infinite;
+}
 .dose-toggle.overdue .dose-status { font-weight: 800; }
-@keyframes overdue { 50% { box-shadow: 0 0 0 4px var(--red-soft); } }
+@keyframes overdue { 50% { opacity: 1; } }
 
 /* Reminder */
 .reminder { display: flex; align-items: center; gap: 6px; }
@@ -761,9 +752,7 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
   align-items: center;
   justify-content: center;
   padding: 16px;
-  background: rgba(8, 10, 25, 0.55);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
+  background: rgba(8, 10, 25, 0.65); /* no blur behind: it is slow on cheaper phones */
 }
 .dialog {
   width: 100%;
@@ -776,7 +765,7 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
   background: var(--surface);
   border: 1px solid var(--border);
   box-shadow: var(--shadow-lg);
-  animation: pop 0.3s cubic-bezier(0.2, 0.8, 0.2, 1.2);
+  animation: pop 0.2s cubic-bezier(0.2, 0.8, 0.2, 1.2);
 }
 .dialog-icon {
   width: 56px;
@@ -1218,7 +1207,7 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
 
 /* ---------- Notes sheet ---------- */
 /* Bottom sheet on phones, floating card on wider screens */
-.sheet-overlay { align-items: flex-end; padding: 0; animation: fade 0.25s ease-out; }
+.sheet-overlay { align-items: flex-end; padding: 0; animation: fade 0.2s ease-out; }
 .sheet {
   width: 100%;
   max-width: 560px;
@@ -1231,7 +1220,7 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
   border: 1px solid var(--border);
   border-bottom: none;
   box-shadow: var(--shadow-lg);
-  animation: sheet-up 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+  animation: sheet-up 0.25s cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 /* Thin accent line along the top edge */
 .sheet::before {
@@ -1244,12 +1233,7 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
   .sheet-overlay { align-items: center; padding: 24px; }
   .sheet { border-radius: 28px; border-bottom: 1px solid var(--border); animation-name: pop; }
 }
-/* A little overshoot so the sheet lands with a soft spring */
-@keyframes sheet-up {
-  0% { transform: translateY(40%); opacity: 0; }
-  70% { transform: translateY(-1.5%); opacity: 1; }
-  100% { transform: none; }
-}
+@keyframes sheet-up { from { transform: translateY(40%); opacity: 0; } }
 @keyframes fade { from { opacity: 0; } }
 
 .sheet-header {
@@ -1403,7 +1387,7 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
   color: var(--bg);
   font-weight: 600;
   box-shadow: var(--shadow-lg);
-  animation: rise 0.25s ease-out;
+  animation: toast-in 0.2s ease-out; /* keeps its translateX(-50%) centring while it rises */
   display: flex;
   align-items: center;
   gap: 14px;
