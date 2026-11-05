@@ -20,7 +20,9 @@ test.beforeEach(async ({ page }) => {
   page.on("response", (res) => {
     if (res.status() >= 400) problems.push(`${res.status()}: ${res.url()}`);
   });
-  await page.goto("/");
+  // With the emulators running (npm run test:emulator, and on GitHub) the app uses them too:
+  // GitHub only has a placeholder config, whose fake key Google's sign-in service rejects.
+  await page.goto(process.env.FIREBASE_AUTH_EMULATOR_HOST ? "/?emulator" : "/");
   await expect(page.locator("#welcome")).toBeVisible({ timeout: 15000 });
 });
 
