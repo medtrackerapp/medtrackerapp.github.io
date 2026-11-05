@@ -1,0 +1,44 @@
+name: Clean up expired guest data
+
+# Once a day, delete guest trackers, PIDs and user records whose expireAt has passed
+# (see cleanup/cleanup.js). Free alternative to Firestore TTL, which needs the paid plan.
+on:
+  schedule:
+    - cron: "30 21 * * *" # 03:00 India time
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Only count what would be deleted"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cleanup
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: cleanup/package-lock.json
+
+      - run: npm ci
+
+      - name: Delete expired guest data
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          # Scheduled runs delete for real; a manual run is a dry run unless unticked
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
+        run: npm run cleanup

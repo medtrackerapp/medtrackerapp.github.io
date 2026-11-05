@@ -95,6 +95,7 @@ button { font: inherit; color: inherit; }
 /* The tracker stays hidden until someone is signed in and the patient has a name */
 body.locked > .app-header,
 body.locked > .tabs,
+body.locked > .folder-bar,
 body.locked > main,
 body.locked > .fab { display: none; }
 
@@ -248,7 +249,7 @@ body.locked > .fab { display: none; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.today-label { margin: 2px 0 0; color: var(--muted); font-size: 0.8rem; font-weight: 500; }
+.today-label { margin: 2px 0 0; color: var(--muted); font-size: 0.8rem; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .header-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 
@@ -356,6 +357,43 @@ body.locked > .fab { display: none; }
   box-shadow: 0 4px 12px rgba(91, 95, 240, 0.3);
 }
 .tab.active .tab-count { background: rgba(255, 255, 255, 0.22); color: #fff; }
+
+/* ---------- Folder bar (shown while a folder is open) ---------- */
+.folder-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 608px;
+  margin: 12px auto 0;
+  margin-left: max(16px, calc((100% - 608px) / 2));
+  margin-right: max(16px, calc((100% - 608px) / 2));
+}
+.folder-bar .icon-btn { flex-shrink: 0; }
+.folder-chip {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 8px 0 14px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  font-weight: 700;
+}
+.folder-chip svg { flex-shrink: 0; color: var(--accent); }
+.folder-chip-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.folder-chip-count {
+  margin-left: auto;
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: color-mix(in srgb, var(--accent) 80%, var(--text)); /* plain accent is faint on its soft tint */
+  font-size: 0.72rem;
+}
 
 /* ---------- Main ---------- */
 /* Bottom padding keeps the last card clear of the + button */
@@ -588,7 +626,7 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
 .overlay {
   position: fixed;
   inset: 0;
-  z-index: 10;
+  z-index: 17; /* above full screens (15), so Rename/Notes/Schedule open over the Medicines screen */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -684,6 +722,7 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
   margin: 0 auto;
   padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
   display: grid;
+  grid-template-columns: minmax(0, 1fr); /* long rows shrink (ellipsis) instead of widening the screen */
   gap: 14px;
 }
 .screen-header { display: flex; align-items: center; gap: 12px; margin-bottom: 4px; }
@@ -714,6 +753,42 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
   outline: none;
 }
 .field input:focus { border-color: var(--accent); }
+
+/* Medicine name suggestions: 10 rows show, the rest scroll */
+.suggest-wrap { position: relative; }
+.suggest {
+  --suggest-row: 44px;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 5;
+  max-height: calc(10 * var(--suggest-row));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+}
+.suggest li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--suggest-row);
+  padding: 0 14px;
+  cursor: pointer;
+}
+.suggest li + li { border-top: 1px solid var(--border); }
+.suggest li[aria-selected="true"] { background: var(--accent-soft); }
+/* Plain muted is too faint on the tinted row */
+.suggest li[aria-selected="true"] .suggest-generic { color: color-mix(in srgb, var(--muted) 80%, var(--text)); }
+@media (hover: hover) { .suggest li:hover { background: var(--surface-2); } }
+.suggest-name { flex-shrink: 0; max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.suggest-generic { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 0.85rem; }
 .field textarea {
   width: 100%;
   margin-top: 4px;
@@ -734,7 +809,7 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
   padding: 2px 8px;
   border-radius: 999px;
   background: var(--surface-2);
-  color: var(--muted);
+  color: color-mix(in srgb, var(--muted) 80%, var(--text)); /* plain muted is too faint on surface-2 */
   font-size: 0.7rem;
   font-weight: 700;
   text-transform: uppercase;
@@ -810,6 +885,202 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
 }
 .ghost:hover { background: var(--surface-2); }
 .dialog-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+/* ---------- Medicines screen (folders + every medicine) ---------- */
+.list-card { padding: 14px 12px; grid-template-columns: minmax(0, 1fr); }
+.section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 4px; }
+.section-head .field-label { margin: 0; font-size: 1rem; }
+.section-head .field-hint { margin: 0; }
+.small-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 12px;
+  background: var(--accent-soft);
+  color: color-mix(in srgb, var(--accent) 80%, var(--text));
+  font-size: 0.85rem;
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: transform 0.12s;
+}
+.small-btn:active { transform: scale(0.96); }
+
+.row-list { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 8px; }
+.tree-hint { padding: 0 4px; }
+.tree { gap: 14px; }
+.tree-item { display: grid; gap: 8px; min-width: 0; }
+/* A folder's medicines sit indented under it, joined by a line on the left */
+.med-group { margin: 0 0 0 12px; padding-left: 8px; border-left: 2px solid var(--border); }
+/* No pill icon on medicine rows: the line already ties them to their folder, and names need the room */
+.med-row .row-icon { display: none; }
+.med-row .row-main { padding-left: 2px; }
+.group-label {
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.group-label + .med-group { margin-top: -2px; }
+/* Empty folders keep an (invisible) list so a dragged row has somewhere to land.
+   While dragging it shows as a dashed drop box; "Not in a folder" only shows when it has rows. */
+.tree:not(.drag-active) .med-group:empty,
+.tree:not(.drag-active) .tree-item.loose:not(:has(.med-row)) { display: none; }
+.tree.drag-active .med-group:empty {
+  min-height: 48px;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--border);
+  border-radius: 14px;
+}
+.tree.drag-active .med-group:empty::before {
+  content: "Drop here";
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+/* The dragged row lets the pointer "see" through it, to find where it's being dropped */
+.row.dragging { pointer-events: none; }
+.tree.drag-active .tree-item > .row:hover { border-color: var(--accent); }
+.row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0; /* a grid item; without this a long name widens the row instead of ellipsing */
+  padding: 5px 6px 5px 4px;
+  border-radius: 16px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  transition: border-color 0.2s, background 0.2s, box-shadow 0.2s;
+}
+.row.active { border-color: var(--accent); background: var(--accent-soft); }
+.row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 12px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+.row-icon {
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+/* "Meds" (all medicines) gets the brand gradient so it reads as the main folder */
+.row-icon.main {
+  color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  box-shadow: 0 4px 12px rgba(91, 95, 240, 0.28);
+}
+.row-text { display: flex; flex-direction: column; min-width: 0; }
+.row-title, .row-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-title { font-weight: 700; }
+.row-meta { color: var(--muted); font-size: 0.78rem; font-weight: 600; }
+.row.active .row-meta { color: color-mix(in srgb, var(--muted) 80%, var(--text)); }
+.row-btn {
+  position: relative;
+  flex-shrink: 0;
+  width: 40px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--accent);
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.2s, transform 0.12s;
+}
+.row-btn:hover { border-color: var(--accent); background: var(--accent-soft); }
+.row-btn:active { transform: scale(0.94); }
+.row-btn.danger { color: var(--red); }
+.row-btn.danger:hover { border-color: var(--red-border); background: var(--red-soft); }
+/* Same dot as the Notes chip on the card */
+.row-btn.has-notes::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-2);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+.drag-handle {
+  flex-shrink: 0;
+  width: 30px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 10px;
+  background: none;
+  color: var(--muted);
+  cursor: grab;
+  touch-action: none; /* the finger drags the row instead of scrolling the page */
+}
+.drag-handle:focus-visible { outline: 2px solid var(--accent); }
+.row.dragging {
+  position: relative;
+  z-index: 2;
+  border-color: var(--accent);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  transition: none;
+}
+.row.dragging .drag-handle { cursor: grabbing; color: var(--accent); }
+
+/* Folder dialog: name + checklist of medicines */
+.folder-dialog { max-height: calc(100vh - 32px); grid-template-rows: auto auto auto auto minmax(0, 1fr) auto; }
+.folder-dialog input[type="text"] { font-size: 1.15rem; }
+.folder-pick { min-height: 0; display: flex; flex-direction: column; margin: 0; padding: 0; border: none; text-align: left; }
+.folder-pick legend { padding: 0 2px; margin-bottom: 6px; color: var(--muted); font-size: 0.85rem; font-weight: 700; }
+.folder-pick-list { display: grid; gap: 6px; max-height: 40vh; overflow-y: auto; overscroll-behavior: contain; }
+.pick-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-weight: 600;
+  cursor: pointer;
+}
+.pick-row:has(input:checked) { border-color: var(--accent); background: var(--accent-soft); }
+.dialog .pick-row input { flex-shrink: 0; width: 20px; height: 20px; margin: 0; padding: 0; accent-color: var(--accent); }
+.pick-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pick-where {
+  margin-left: auto;
+  flex-shrink: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.pick-where:empty { display: none; }
 
 /* ---------- Notes sheet ---------- */
 /* Bottom sheet on phones, floating card on wider screens */
@@ -987,11 +1258,19 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
   animation: rise 0.25s ease-out;
 }
 
+/* ---------- Phones ---------- */
+/* The menu button takes the pill logo's place in the header so the patient's name still fits */
+@media (max-width: 480px) {
+  .brand .brand-icon { display: none; }
+}
+
 /* ---------- Small phones ---------- */
 @media (max-width: 400px) {
   .brand h1 { font-size: 1rem; }
   .brand-icon { width: 36px; height: 36px; border-radius: 11px; }
   .icon-btn { width: 36px; height: 36px; }
+  .row-btn { width: 36px; }
+  .row-icon { display: none; }
   .reminder { width: 100%; }
   .reminder-btn { flex: 1; justify-content: center; }
 }

@@ -9,7 +9,10 @@ import {
   setDoc,
   updateDoc,
   deleteField,
+  arrayUnion,
+  arrayRemove,
   FieldPath,
+  Timestamp,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import {
   getAuth,
@@ -96,14 +99,17 @@ let user; // undefined until Firebase reports the sign-in state, then null or th
 //   doses: { "2026-10-30": { "4_0": true, ... } }  – keyed by date, so each day starts fresh
 //   reminders: { "4_0": "08:30" }
 //   medicines: { "m3k…": { name, everyDays, dosesPerDay, notes, startDate, createdAt } } – added via "+"
+//   order: ["m3k…", "4", …]       – tab order set by dragging on the Medicines screen
+//   folders: { "f9x…": { name, meds: ["m3k…", …], createdAt } } – a medicine is in one folder at most
 // Dose/reminder keys are `${tabId}_${doseIndex}`; tab IDs never contain "_".
 let shared = null; // null until the first snapshot arrives
 
 // Per-phone only (localStorage), per patient:
-let local = { activeTab: "1", notified: {} }; // notified: "4_0" -> last date this phone alerted
+// notified: "4_0" -> last date this phone alerted; folder: open folder id, null for all ("Meds")
+let local = { activeTab: "1", notified: {}, folder: null };
 
 function loadLocal() {
-  local = { activeTab: "1", notified: {} };
+  local = { activeTab: "1", notified: {}, folder: null };
   try {
     local = { ...local, ...JSON.parse(localStorage.getItem(`medicineTracker:${patientId}`)) };
   } catch {}
@@ -145,17 +151,49 @@ function allTabs() {
   const custom = Object.entries(shared?.medicines ?? {})
     .map(([id, m]) => ({ id, custom: true, label: m.name, ...m }))
     .sort((a, b) => a.createdAt - b.createdAt);
-  return [...builtins, ...custom];
+  // Dragged order first; anything not in it yet (e.g. just added) keeps its place at the end.
+  const order = shared?.order ?? [];
+  const rank = (id) => (order.includes(id) ? order.indexOf(id) : order.length);
+  return [...builtins, ...custom].sort((a, b) => rank(a.id) - rank(b.id));
 }
 
 function findTab(id) {
   return allTabs().find((t) => t.id === id);
 }
 
+// ---------- Folders ----------
+function allFolders() {
+  return Object.entries(shared?.folders ?? {})
+    .map(([id, f]) => ({ id, ...f, meds: f.meds ?? [] }))
+    .sort((a, b) => a.createdAt - b.createdAt);
+}
+
+// A medicine sits in one folder at most. Older data could list it in two; the first folder wins.
+function folderOf(tabId) {
+  return allFolders().find((f) => f.meds.includes(tabId))?.id ?? null;
+}
+
+function folderTabs(folder) {
+  return allTabs().filter((t) => folderOf(t.id) === folder.id);
+}
+
+// The open folder, or null for all medicines. A folder that was deleted or emptied
+// (maybe by another nurse) falls back to all medicines.
+function currentFolder() {
+  const folder = allFolders().find((f) => f.id === local.folder);
+  return folder && folderTabs(folder).length ? folder : null;
+}
+
+function visibleTabs() {
+  const folder = currentFolder();
+  return folder ? folderTabs(folder) : allTabs();
+}
+
 // The tab on screen: the saved one, or the first tab when nothing valid is saved yet
 // (a phone opening this patient for the first time, e.g. an attendant, still has the default "1").
 function currentTab() {
-  return findTab(local.activeTab) ?? allTabs()[0];
+  const tabs = visibleTabs();
+  return tabs.find((t) => t.id === local.activeTab) ?? tabs[0];
 }
 
 function isDueToday(tab) {
@@ -204,13 +242,55 @@ function setReminder(key, time) {
     .catch(reportError);
 }
 
-function addMedicine({ name, everyDays, dosesPerDay, notes, totalDays }) {
+// Added while a folder is open, the medicine goes in that folder too.
+function addMedicine({ name, everyDays, dosesPerDay, notes, totalDays }, folderId) {
   const id = "m" + randomId(10);
   const medicine = { name, everyDays, dosesPerDay, notes, startDate: todayStr(), createdAt: Date.now() };
   const course = { startDays: totalDays, startDate: todayStr() };
-  setDoc(patientRef, { medicines: { [id]: medicine }, courses: { [id]: course } }, { merge: true })
-    .catch(reportError);
+  const data = { medicines: { [id]: medicine }, courses: { [id]: course } };
+  if (folderId) {
+    data.folders = { [folderId]: { meds: arrayUnion(id) } };
+    shared.folders[folderId].meds = [...(shared.folders[folderId].meds ?? []), id]; // so the folder stays open
+  }
+  setDoc(patientRef, data, { merge: true }).catch(reportError);
   return id;
+}
+
+// Medicines ticked for this folder leave whatever folder they were in, so each is in one only.
+function saveFolder(id, folder) {
+  (shared.folders ??= {})[id] = folder; // apply locally first, like updateTabField
+  const fields = [new FieldPath("folders", id), folder];
+  for (const other of allFolders()) {
+    const meds = other.meds.filter((m) => !folder.meds.includes(m));
+    if (other.id === id || meds.length === other.meds.length) continue;
+    shared.folders[other.id].meds = meds;
+    fields.push(new FieldPath("folders", other.id, "meds"), meds);
+  }
+  updateDoc(patientRef, ...fields).catch(reportError);
+}
+
+// After a drag or arrow-key move on the Medicines screen: the row's group is now its folder
+// (or none), and the tree from top to bottom is the new tab order.
+function saveTree(row) {
+  const id = row.dataset.id;
+  const group = row.parentElement.dataset.group;
+  const target = shared.folders?.[group] ? group : null;
+  const fields = [];
+  for (const f of allFolders()) {
+    const want = f.id === target;
+    if (f.meds.includes(id) === want) continue;
+    const meds = want ? [...f.meds, id] : f.meds.filter((m) => m !== id);
+    shared.folders[f.id].meds = meds;
+    fields.push(new FieldPath("folders", f.id, "meds"), meds);
+  }
+  shared.order = [...els.folderList.querySelectorAll(".med-row")].map((r) => r.dataset.id);
+  fields.push(new FieldPath("order"), shared.order);
+  updateDoc(patientRef, ...fields).catch(reportError);
+}
+
+function deleteFolder(id) {
+  delete shared.folders?.[id];
+  updateDoc(patientRef, new FieldPath("folders", id), deleteField()).catch(reportError);
 }
 
 // Name and notes live under "medicines" for added medicines and "builtins" for 1x/4x/6x.
@@ -241,6 +321,10 @@ function removeMedicine(tab) {
       : [new FieldPath("builtins", id, "removed"), true]),
     new FieldPath("courses", id), deleteField(),
     ...reminderDeletes(id),
+    // Take it out of the tab order and any folders too
+    ...(shared.order?.includes(id) ? [new FieldPath("order"), arrayRemove(id)] : []),
+    ...allFolders().filter((f) => f.meds.includes(id))
+      .flatMap((f) => [new FieldPath("folders", f.id, "meds"), arrayRemove(id)]),
   ).catch(reportError);
 }
 
@@ -262,6 +346,8 @@ const els = {
   pidEnter: document.getElementById("pid-enter"),
   pidBack: document.getElementById("pid-back"),
   infoPid: document.getElementById("info-pid"),
+  infoExpiryBox: document.getElementById("info-expiry-box"),
+  infoExpiry: document.getElementById("info-expiry"),
   infoBtn: document.getElementById("info-btn"),
   infoScreen: document.getElementById("info-screen"),
   infoBack: document.getElementById("info-back"),
@@ -323,6 +409,7 @@ const els = {
   addForm: document.getElementById("add-form"),
   addBack: document.getElementById("add-back"),
   addName: document.getElementById("add-name"),
+  addSuggest: document.getElementById("add-suggest"),
   addEvery: document.getElementById("add-every"),
   addDoses: document.getElementById("add-doses"),
   addDuration: document.getElementById("add-duration"),
@@ -330,6 +417,23 @@ const els = {
   addNotes: document.getElementById("add-notes"),
   addSummary: document.getElementById("add-summary"),
   toast: document.getElementById("toast"),
+  menuBtn: document.getElementById("menu-btn"),
+  folderBar: document.getElementById("folder-bar"),
+  folderName: document.getElementById("folder-name"),
+  folderCount: document.getElementById("folder-count"),
+  homeBtn: document.getElementById("home-btn"),
+  medsScreen: document.getElementById("meds-screen"),
+  medsBack: document.getElementById("meds-back"),
+  folderNew: document.getElementById("folder-new"),
+  folderList: document.getElementById("folder-list"),
+  medHint: document.getElementById("med-hint"),
+  medEmpty: document.getElementById("med-empty"),
+  folderDialog: document.getElementById("folder-dialog"),
+  folderForm: document.getElementById("folder-form"),
+  folderDialogTitle: document.getElementById("folder-dialog-title"),
+  folderNameInput: document.getElementById("folder-name-input"),
+  folderPickList: document.getElementById("folder-pick-list"),
+  folderCancel: document.getElementById("folder-cancel"),
 };
 
 function formatTime(hhmm) {
@@ -405,7 +509,8 @@ function render() {
   renderedDate = todayStr();
   if (!renderGate()) return;
 
-  const tabs = allTabs();
+  const tabs = visibleTabs();
+  const folder = currentFolder();
   // Don't overwrite the saved tab: a just-added medicine may not be in the snapshot yet.
   const tab = currentTab();
 
@@ -416,12 +521,18 @@ function render() {
 
   if (notesTabId) renderNotes(); // another nurse may have changed or removed it
   if (scheduleTabId) renderSchedule();
+  renderMeds();
 
   const empty = !tab;
   els.empty.classList.toggle("hidden", !empty);
   els.tracker.classList.toggle("hidden", empty);
   els.tabs.classList.toggle("hidden", empty);
   els.daysLeftBtn.classList.toggle("hidden", empty);
+  els.folderBar.classList.toggle("hidden", !folder);
+  if (folder) {
+    els.folderName.textContent = folder.name;
+    els.folderCount.textContent = plural(tabs.length, "med");
+  }
   if (empty) return;
 
   renderTabs(tabs, tab.id);
@@ -625,8 +736,11 @@ async function openByPid(u) {
   const pid = pendingPid;
   try {
     const id = (await getDoc(doc(db, "pids", pid))).data()?.patientId;
+    // The PID can outlive its tracker for a few hours (each is deleted on its own after 30 days).
+    // Opening it then would make a new empty tracker in its place, so check it's still there.
+    const exists = !!id && await trackerExists(id);
     if (user !== u || pendingPid !== pid) return; // signed out or backed out meanwhile
-    if (!id) return showToast(`No patient found with PID ${pid}.`);
+    if (!exists) return showToast(`No patient found with PID ${pid}.`);
     pendingPid = null;
     attendant = false;
     unsubscribe?.();
@@ -645,23 +759,51 @@ function googleName(u) {
 
 // Which patient to open: the share link's, else this account's own, else a new one.
 async function resolvePatient(u) {
-  const fromLink = new URLSearchParams(location.search).get("patient");
+  let fromLink = new URLSearchParams(location.search).get("patient");
+  if (fromLink?.length < 16) fromLink = null;
+  // A link to a tracker that's gone opens this account's own tracker instead of reviving it empty
+  if (fromLink && !(await trackerExists(fromLink))) {
+    showToast("That tracker no longer exists. Guest trackers are deleted after 30 days.");
+    fromLink = null;
+  }
   const userRef = doc(db, "users", u.uid);
   const home = (await getDoc(userRef)).data()?.patientId ?? null;
-  const id = fromLink?.length >= 16 ? fromLink : home ?? randomId();
-  if (!home) setDoc(userRef, { patientId: id }, { merge: true }).catch(reportError);
+  const id = fromLink ?? home ?? randomId();
+  if (!home) {
+    const data = { patientId: id };
+    if (u.isAnonymous) data.expireAt = guestExpiry();
+    setDoc(userRef, data, { merge: true }).catch(reportError);
+  }
   return id;
 }
 
 let unsubscribe = null; // stops the current patient's snapshot listener
 let claimed = false;
 let pidRequested = false;
+let newGuestExpiry = null; // set when a guest makes a tracker, so its PID gets the same expiry
+
+// ---------- Guest clean-up ----------
+// Guests can't sign back in once signed out, so what they make is deleted after 30 days.
+// The app only stamps expireAt (a Firestore Timestamp) on the guest's patient, users and pids
+// docs; a daily GitHub Action (cleanup/cleanup.js) deletes the ones whose date has passed.
+const GUEST_DAYS = 30;
+
+function guestExpiry() {
+  return Timestamp.fromMillis(Date.now() + GUEST_DAYS * 86400000);
+}
+
+// Asks the server when online. Changes this phone made but hasn't synced yet count too,
+// so a tracker just made offline isn't mistaken for a deleted one.
+async function trackerExists(id) {
+  return (await getDoc(doc(db, "patients", id))).exists();
+}
 
 function openPatient(id) {
   patientId = id;
   patientRef = doc(db, "patients", id);
   claimed = false;
   pidRequested = false;
+  newGuestExpiry = null;
   loadLocal();
   const params = new URLSearchParams(location.search);
   params.set("patient", id);
@@ -686,7 +828,11 @@ function claimPatient() {
   claimed = true;
   const data = { patient: { name: googleName(user) }, ownerUid: user.uid };
   // An empty record is a brand-new patient: start without the old 1x/4x/6x tabs.
-  if (Object.keys(shared).length === 0) data.builtinTabs = false;
+  if (Object.keys(shared).length === 0) {
+    data.builtinTabs = false;
+    // Only a tracker a guest makes from scratch expires; an older one a guest happens to open never does.
+    if (user.isAnonymous) data.expireAt = newGuestExpiry = guestExpiry();
+  }
   setDoc(patientRef, data, { merge: true }).catch(reportError);
 }
 
@@ -696,12 +842,21 @@ async function assignPid() {
   if (pidRequested) return; // once per open, like claimPatient
   pidRequested = true;
   const id = patientId;
+  // A guest's tracker: the PID goes when the tracker does (claimPatient runs just before this)
+  const expireAt = shared.expireAt ?? newGuestExpiry;
   for (let tries = 0; tries < 5; tries++) {
     const pid = randomPid();
     try {
-      await setDoc(doc(db, "pids", pid), { patientId: id });
+      try {
+        await setDoc(doc(db, "pids", pid), expireAt ? { patientId: id, expireAt } : { patientId: id });
+      } catch (err) {
+        // Rules published before expireAt existed refuse it; save the PID without it then
+        // (the tracker still expires, this PID just stays reserved).
+        if (!expireAt || err.code !== "permission-denied") throw err;
+        await setDoc(doc(db, "pids", pid), { patientId: id });
+      }
     } catch (err) {
-      if (err.code === "permission-denied") continue;
+      if (err.code === "permission-denied") continue; // PID already taken: draw another
       return reportError(err);
     }
     return setDoc(doc(db, "patients", id), { patient: { pid } }, { merge: true }).catch(reportError);
@@ -773,6 +928,7 @@ function closeScreen(el) {
 window.addEventListener("popstate", () => {
   els.addScreen.classList.add("hidden");
   els.infoScreen.classList.add("hidden");
+  els.medsScreen.classList.add("hidden");
 });
 
 // ---------- Info ----------
@@ -782,6 +938,12 @@ els.infoBtn.addEventListener("click", () => {
       : [user.displayName, user.isAnonymous ? "Guest" : user.email].filter(Boolean).join(" · "))
     : "";
   els.infoPid.textContent = shared?.patient?.pid ?? "Not assigned yet";
+  const expires = shared?.expireAt?.toDate?.();
+  els.infoExpiryBox.classList.toggle("hidden", !expires);
+  if (expires) {
+    els.infoExpiry.textContent = `Made as a guest, so this tracker and everything in it is deleted on ${
+      expires.toLocaleDateString([], { day: "numeric", month: "long", year: "numeric" })}.`;
+  }
   openScreen(els.infoScreen);
 });
 els.infoBack.addEventListener("click", () => closeScreen(els.infoScreen));
@@ -791,6 +953,133 @@ els.signoutBtn.addEventListener("click", () => {
   // Drop the patient from the URL so the next account on this phone opens its own tracker.
   history.replaceState(null, "", location.pathname);
   signOut(auth).catch(reportError);
+});
+
+// ---------- Medicine name suggestions ----------
+// The list is big, so it loads the first time the add screen opens.
+// It only suggests: whatever the nurse types is saved as is.
+let medicines = []; // [{ name, generic }] from medicines.js
+let medicinesLoading = null;
+let suggestions = []; // what the dropdown shows right now
+let activeSuggestion = -1; // highlighted with the arrow keys
+const byName = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" }); // "Thyronorm 25" before "100"
+
+function loadMedicines() {
+  medicinesLoading ??= import("./medicines.js?v=dev")
+    .then((m) => {
+      medicines = m.MEDICINES.map((med) => ({ ...med, nameKey: med.name.toLowerCase(), genericKey: med.generic.toLowerCase() }));
+      if (document.activeElement === els.addName) updateSuggestions(); // they started typing before it arrived
+    })
+    .catch((err) => {
+      console.error(err);
+      medicinesLoading = null; // try again next time
+    });
+}
+
+// Best matches first: name starts with it, then a word in the name, then what's in it, then anywhere.
+function matchMedicines(text) {
+  const q = text.trim().toLowerCase();
+  if (!q) return [];
+  const startsWord = (s) => s.startsWith(q) || s.includes(` ${q}`) || s.includes(`-${q}`);
+  const rank = (m) => {
+    if (m.nameKey.startsWith(q)) return 0;
+    if (startsWord(m.nameKey)) return 1;
+    if (startsWord(m.genericKey)) return 2;
+    if (m.nameKey.includes(q) || m.genericKey.includes(q)) return 3;
+    return -1;
+  };
+  return medicines
+    .map((m) => [rank(m), m])
+    .filter(([r]) => r >= 0)
+    .sort((a, b) => a[0] - b[0] || byName.compare(a[1].name, b[1].name))
+    .map(([, m]) => m);
+}
+
+function updateSuggestions() {
+  suggestions = matchMedicines(els.addName.value);
+  // Nothing to offer once they've typed a name exactly
+  if (suggestions.length === 1 && suggestions[0].nameKey === els.addName.value.trim().toLowerCase()) suggestions = [];
+  activeSuggestion = -1;
+  els.addSuggest.replaceChildren(
+    ...suggestions.map((m, i) => {
+      const li = document.createElement("li");
+      li.id = `add-suggest-${i}`;
+      li.setAttribute("role", "option");
+      li.setAttribute("aria-selected", "false");
+      const name = document.createElement("span");
+      name.className = "suggest-name";
+      name.textContent = m.name;
+      li.append(name);
+      if (m.generic) {
+        const generic = document.createElement("span");
+        generic.className = "suggest-generic";
+        generic.textContent = m.generic;
+        li.append(generic);
+      }
+      return li;
+    })
+  );
+  els.addSuggest.scrollTop = 0;
+  showSuggestions(suggestions.length > 0);
+}
+
+function showSuggestions(show) {
+  els.addSuggest.classList.toggle("hidden", !show);
+  els.addName.setAttribute("aria-expanded", show);
+  els.addName.removeAttribute("aria-activedescendant");
+  if (show) fitSuggestions();
+}
+
+// Up to 10 rows, fewer if the phone keyboard would cover them.
+function fitSuggestions() {
+  const viewport = window.visualViewport;
+  const bottom = viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
+  const room = bottom - els.addName.getBoundingClientRect().bottom - 14;
+  els.addSuggest.style.maxHeight = room < 440 ? `${Math.max(132, room)}px` : "";
+}
+
+function highlightSuggestion(i) {
+  els.addSuggest.children[activeSuggestion]?.setAttribute("aria-selected", "false");
+  activeSuggestion = i;
+  const li = els.addSuggest.children[i];
+  li.setAttribute("aria-selected", "true");
+  li.scrollIntoView({ block: "nearest" });
+  els.addName.setAttribute("aria-activedescendant", li.id);
+}
+
+function pickSuggestion(i) {
+  els.addName.value = suggestions[i].name;
+  showSuggestions(false);
+  updateAddSummary();
+}
+
+els.addName.addEventListener("input", updateSuggestions);
+els.addName.addEventListener("blur", () => showSuggestions(false));
+window.visualViewport?.addEventListener("resize", () => {
+  if (!els.addSuggest.classList.contains("hidden")) fitSuggestions();
+});
+
+els.addName.addEventListener("keydown", (e) => {
+  const open = !els.addSuggest.classList.contains("hidden");
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    if (!open) return updateSuggestions();
+    e.preventDefault();
+    const step = e.key === "ArrowDown" ? 1 : -1;
+    highlightSuggestion((activeSuggestion + step + suggestions.length) % suggestions.length);
+  } else if (e.key === "Enter" && open && activeSuggestion >= 0) {
+    e.preventDefault(); // pick it instead of submitting the form
+    pickSuggestion(activeSuggestion);
+  } else if (e.key === "Escape" && open) {
+    e.stopPropagation();
+    showSuggestions(false);
+  }
+});
+
+// pointerdown would move focus off the input (and close the list) before the click lands.
+els.addSuggest.addEventListener("pointerdown", (e) => e.preventDefault());
+els.addSuggest.addEventListener("click", (e) => {
+  const li = e.target.closest("li");
+  if (li) pickSuggestion([...els.addSuggest.children].indexOf(li));
 });
 
 // ---------- Add / remove medicine ----------
@@ -821,6 +1110,8 @@ function updateAddSummary() {
 function openAddScreen() {
   els.addForm.reset();
   setAddUnit("days");
+  showSuggestions(false);
+  loadMedicines();
   openScreen(els.addScreen);
   els.addName.focus();
 }
@@ -843,10 +1134,11 @@ els.addForm.addEventListener("submit", (e) => {
   if (!name || !everyDays || !dosesPerDay || !duration) return;
   const totalDays = duration * (addUnit === "weeks" ? 7 : 1);
   const notes = els.addNotes.value.trim();
-  const id = addMedicine({ name, everyDays, dosesPerDay, notes, totalDays });
+  const folder = currentFolder();
+  const id = addMedicine({ name, everyDays, dosesPerDay, notes, totalDays }, folder?.id);
   closeAddScreen();
   selectTab(id);
-  showToast(`${name} added for all nurses.`);
+  showToast(folder ? `${name} added to ${folder.name}.` : `${name} added for all nurses.`);
 });
 
 els.removeBtn.addEventListener("click", () => {
@@ -854,7 +1146,7 @@ els.removeBtn.addEventListener("click", () => {
   if (!tab) return;
   if (!confirm(`Remove ${tab.name}? It will disappear for all nurses.`)) return;
   removeMedicine(tab);
-  selectTab(allTabs().find((t) => t.id !== tab.id)?.id ?? "");
+  selectTab(visibleTabs().find((t) => t.id !== tab.id)?.id ?? allTabs().find((t) => t.id !== tab.id)?.id ?? "");
 });
 
 // Overlays fade out before hiding (see .closing in style.css).
@@ -871,17 +1163,22 @@ function hideOverlay(el) {
 }
 
 // ---------- Rename ----------
-els.renameBtn.addEventListener("click", () => {
-  const tab = currentTab();
+let renameTabId = null; // tab being renamed (from its card, or any row on the Medicines screen)
+
+function openRename(id = currentTab()?.id) {
+  const tab = findTab(id);
   if (!tab) return;
+  renameTabId = id;
   els.renameInput.value = tab.name;
   showOverlay(els.rename);
   els.renameInput.select();
-});
+}
+
+els.renameBtn.addEventListener("click", () => openRename());
 
 els.renameForm.addEventListener("submit", (e) => {
   e.preventDefault();
-  const tab = currentTab();
+  const tab = findTab(renameTabId);
   const name = els.renameInput.value.trim();
   if (!name) return;
   if (tab && name !== tab.name) updateTabField(tab, "name", name);
@@ -911,8 +1208,8 @@ function renderNotes() {
   els.notesEdit.textContent = notesEditing ? "Save" : text ? "Edit" : "Add notes";
 }
 
-function openNotes() {
-  notesTabId = currentTab()?.id;
+function openNotes(id = currentTab()?.id) {
+  notesTabId = id;
   notesEditing = false;
   renderNotes();
   showOverlay(els.notes);
@@ -927,7 +1224,7 @@ function closeNotes(force = false) {
   hideOverlay(els.notes);
 }
 
-els.notesBtn.addEventListener("click", openNotes);
+els.notesBtn.addEventListener("click", () => openNotes());
 els.notesClose.addEventListener("click", () => closeNotes());
 els.notes.addEventListener("click", (e) => {
   if (e.target === els.notes) closeNotes();
@@ -1000,8 +1297,8 @@ function scheduleChanges(tab) {
   return fields;
 }
 
-function openSchedule() {
-  scheduleTabId = currentTab()?.id;
+function openSchedule(id = currentTab()?.id) {
+  scheduleTabId = id;
   scheduleEditing = false;
   renderSchedule();
   showOverlay(els.schedule);
@@ -1016,8 +1313,8 @@ function closeSchedule(force = false) {
   hideOverlay(els.schedule);
 }
 
-els.scheduleBtn.addEventListener("click", openSchedule);
-els.daysLeftBtn.addEventListener("click", openSchedule);
+els.scheduleBtn.addEventListener("click", () => openSchedule());
+els.daysLeftBtn.addEventListener("click", () => openSchedule());
 els.scheduleClose.addEventListener("click", () => closeSchedule());
 els.schedule.addEventListener("click", (e) => {
   if (e.target === els.schedule) closeSchedule();
@@ -1048,9 +1345,325 @@ els.scheduleDiscard.addEventListener("click", () => {
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (!els.rename.classList.contains("hidden")) hideOverlay(els.rename);
+  else if (!els.folderDialog.classList.contains("hidden")) hideOverlay(els.folderDialog);
   else if (notesTabId) closeNotes();
   else if (scheduleTabId) closeSchedule();
 });
+
+// ---------- Medicines screen (menu button): folders, reorder, per-medicine actions ----------
+const svg = (paths) => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor"
+  stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths}</svg>`;
+const ICONS = {
+  folder: svg(`<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>`),
+  pill: svg(`<path d="M10.5 20.5 3.5 13.5a4.95 4.95 0 1 1 7-7l7 7a4.95 4.95 0 1 1-7 7Z"/><path d="m8.5 8.5 7 7"/>`),
+  grip: svg(`<circle cx="9" cy="6" r="1.4"/><circle cx="15" cy="6" r="1.4"/><circle cx="9" cy="12" r="1.4"/>`
+    + `<circle cx="15" cy="12" r="1.4"/><circle cx="9" cy="18" r="1.4"/><circle cx="15" cy="18" r="1.4"/>`),
+  rename: svg(`<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>`),
+  schedule: svg(`<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>`),
+  notes: svg(`<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>`),
+  trash: svg(`<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/>`),
+};
+
+function rowButton(icon, label, onClick, extraClass = "") {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = `row-btn ${extraClass}`.trim();
+  btn.title = label;
+  btn.setAttribute("aria-label", label);
+  btn.innerHTML = ICONS[icon];
+  btn.addEventListener("click", onClick);
+  return btn;
+}
+
+// Icon + title + one line of detail; used by folder and medicine rows
+function rowMain(icon, title, meta, onClick, iconClass = "") {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "row-main";
+  btn.innerHTML = `<span class="row-icon ${iconClass}">${ICONS[icon]}</span>
+    <span class="row-text"><span class="row-title"></span><span class="row-meta"></span></span>`;
+  btn.querySelector(".row-title").textContent = title;
+  btn.querySelector(".row-meta").textContent = meta;
+  btn.addEventListener("click", onClick);
+  return btn;
+}
+
+function todayCount(tab) {
+  if (!isDueToday(tab)) return "not due today";
+  let done = 0;
+  for (let i = 0; i < tab.dosesPerDay; i++) if (isTaken(tab.id, i)) done++;
+  return `${done}/${tab.dosesPerDay} today`;
+}
+
+function medRow(tab, folderId) {
+  const li = document.createElement("li");
+  li.className = "row med-row";
+  li.dataset.id = tab.id;
+
+  const handle = document.createElement("button");
+  handle.type = "button";
+  handle.className = "drag-handle";
+  handle.title = "Drag to reorder";
+  handle.setAttribute("aria-label", `Move ${tab.name} (arrow keys)`);
+  handle.innerHTML = ICONS.grip;
+  handle.addEventListener("pointerdown", (e) => startDrag(e, li));
+  handle.addEventListener("keydown", (e) => moveWithKeys(e, li));
+
+  li.append(
+    handle,
+    rowMain("pill", tab.name, `${scheduleText(tab.everyDays, tab.dosesPerDay)} · ${todayCount(tab)}`, () => showTab(tab.id, folderId)),
+    rowButton("rename", `Rename ${tab.name}`, () => openRename(tab.id)),
+    rowButton("schedule", `Schedule for ${tab.name}`, () => openSchedule(tab.id)),
+    rowButton("notes", `Notes for ${tab.name}`, () => openNotes(tab.id), tab.notes?.trim() ? "has-notes" : ""),
+  );
+  return li;
+}
+
+// A folder's medicines, indented under it. Always there (even empty) so rows can be dropped in.
+function medGroup(tabs, group, folderId = null) {
+  const ul = document.createElement("ul");
+  ul.className = "row-list med-group";
+  ul.dataset.group = group;
+  for (const tab of tabs) ul.append(medRow(tab, folderId));
+  return ul;
+}
+
+// Tree: "Meds" (all), then each folder followed by its medicines, then the ones in no folder.
+function renderMeds() {
+  if (els.medsScreen.classList.contains("hidden") || drag) return; // don't rebuild a row mid-drag
+  const tabs = allTabs();
+  const folders = allFolders();
+  const open = currentFolder();
+  // Every database update redraws the list; keep the keyboard on the grip it was on
+  const focusedId = document.activeElement?.matches?.("#folder-list .drag-handle")
+    ? document.activeElement.closest(".med-row").dataset.id : null;
+  els.folderList.innerHTML = "";
+
+  const main = document.createElement("li");
+  main.className = "tree-item";
+  const mainRow = document.createElement("div");
+  mainRow.className = "row" + (open ? "" : " active");
+  mainRow.append(rowMain("folder", "Meds", `All medicines · ${plural(tabs.length, "med")}`, () => openFolder(null), "main"));
+  main.append(mainRow);
+  if (!folders.length && tabs.length) main.append(medGroup(tabs, "all"));
+  els.folderList.append(main);
+
+  for (const folder of folders) {
+    const inFolder = folderTabs(folder);
+    const li = document.createElement("li");
+    li.className = "tree-item";
+    const row = document.createElement("div");
+    row.className = "row" + (open?.id === folder.id ? " active" : "");
+    row.append(
+      rowMain("folder", folder.name, inFolder.length ? plural(inFolder.length, "med") : "Empty, tap or drag medicines here",
+        () => openFolder(folder.id)),
+      rowButton("rename", `Edit folder ${folder.name}`, () => openFolderDialog(folder.id)),
+      rowButton("trash", `Delete folder ${folder.name}`, () => confirmDeleteFolder(folder), "danger"),
+    );
+    li.append(row, medGroup(inFolder, folder.id, folder.id));
+    els.folderList.append(li);
+  }
+
+  if (folders.length) {
+    const li = document.createElement("li");
+    li.className = "tree-item loose";
+    const label = document.createElement("span");
+    label.className = "group-label";
+    label.textContent = "Not in a folder";
+    li.append(label, medGroup(tabs.filter((t) => !folderOf(t.id)), "loose"));
+    els.folderList.append(li);
+  }
+
+  els.medEmpty.classList.toggle("hidden", tabs.length > 0);
+  els.medHint.classList.toggle("hidden", tabs.length < 2 && !folders.length);
+  if (focusedId) els.folderList.querySelector(`.med-row[data-id="${CSS.escape(focusedId)}"] .drag-handle`)?.focus();
+}
+
+function openMeds() {
+  openScreen(els.medsScreen);
+  renderMeds();
+}
+
+function closeMeds() {
+  if (!els.medsScreen.classList.contains("hidden")) closeScreen(els.medsScreen);
+}
+
+// null opens "Meds" (every medicine). An empty folder opens its editor instead, since there's nothing to show.
+function openFolder(id) {
+  const folder = allFolders().find((f) => f.id === id);
+  if (folder && !folderTabs(folder).length) return openFolderDialog(id);
+  local.folder = folder ? id : null;
+  const tabs = folder ? folderTabs(folder) : allTabs();
+  if (!tabs.some((t) => t.id === local.activeTab)) local.activeTab = tabs[0]?.id ?? local.activeTab;
+  saveLocal();
+  closeMeds();
+  render();
+}
+
+// Tapping a medicine opens its tab, inside the folder it was listed under (or all medicines).
+function showTab(id, folderId = null) {
+  local.folder = folderId;
+  closeMeds();
+  selectTab(id);
+}
+
+els.menuBtn.addEventListener("click", openMeds);
+els.medsBack.addEventListener("click", closeMeds);
+els.homeBtn.addEventListener("click", () => openFolder(null));
+
+// ---------- Moving medicines (drag the grip, or focus it and use the arrow keys) ----------
+// A row can be dropped anywhere in the tree: between other medicines, on a folder's name
+// (goes to the top of that folder) or on an empty folder's drop box.
+let drag = null; // { li, startY, scroll, moved }
+
+function middle(el) {
+  const box = el.getBoundingClientRect();
+  return box.top + box.height / 2;
+}
+
+function startDrag(e, li) {
+  if (e.button > 0) return;
+  e.preventDefault();
+  drag = { li, startY: e.clientY, scroll: els.medsScreen.scrollTop, moved: false };
+  li.classList.add("dragging");
+  els.folderList.classList.add("drag-active"); // shows drop boxes for empty folders
+  // On window, not the grip: moving the row in the page drops the grip's pointer capture
+  addEventListener("pointermove", moveDrag);
+  addEventListener("pointerup", endDrag);
+  addEventListener("pointercancel", endDrag);
+}
+
+// Puts the row where the pointer is. Returns true if it moved.
+function placeRow(li, x, y) {
+  const target = document.elementFromPoint(x, y)?.closest(".med-row, .tree-item > .row, .group-label, .med-group");
+  if (!target || !els.folderList.contains(target)) return false;
+  if (target.classList.contains("med-row")) {
+    if (y > middle(target)) {
+      if (target.nextElementSibling === li) return false;
+      target.after(li);
+    } else {
+      if (target.previousElementSibling === li) return false;
+      target.before(li);
+    }
+    return true;
+  }
+  // A folder's name or the "Not in a folder" label: to the top of that group.
+  // Over a group itself (the gap between rows, or an empty folder's drop box): only if it's empty.
+  const isGroup = target.classList.contains("med-group");
+  const group = isGroup ? target : target.parentElement.querySelector(".med-group");
+  if (!group || group === li.parentElement) return false;
+  if (isGroup && group.querySelector(".med-row")) return false;
+  group.prepend(li);
+  return true;
+}
+
+function moveDrag(e) {
+  if (!drag) return;
+  const { li } = drag;
+  // Scroll the screen when dragging near its top or bottom edge
+  if (e.clientY < 80) els.medsScreen.scrollTop -= 10;
+  else if (e.clientY > innerHeight - 80) els.medsScreen.scrollTop += 10;
+  drag.startY -= els.medsScreen.scrollTop - drag.scroll;
+  drag.scroll = els.medsScreen.scrollTop;
+
+  li.style.transform = `translateY(${e.clientY - drag.startY}px)`;
+  const before = li.getBoundingClientRect().top;
+  if (!placeRow(li, e.clientX, e.clientY)) return;
+  drag.startY += li.getBoundingClientRect().top - before; // the row moved in the page, so count from its new spot
+  li.style.transform = `translateY(${e.clientY - drag.startY}px)`;
+  drag.moved = true;
+}
+
+function endDrag() {
+  removeEventListener("pointermove", moveDrag);
+  removeEventListener("pointerup", endDrag);
+  removeEventListener("pointercancel", endDrag);
+  if (!drag) return;
+  const { li, moved } = drag;
+  li.classList.remove("dragging");
+  li.style.transform = "";
+  els.folderList.classList.remove("drag-active");
+  drag = null;
+  if (moved) saveTree(li);
+  render();
+}
+
+// Up/Down move one place; at the edge of a folder they step into the folder above or below.
+function moveWithKeys(e, li) {
+  if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+  e.preventDefault();
+  const up = e.key === "ArrowUp";
+  const sibling = up ? li.previousElementSibling : li.nextElementSibling;
+  if (sibling) {
+    if (up) sibling.before(li);
+    else sibling.after(li);
+  } else {
+    const groups = [...els.folderList.querySelectorAll(".med-group")];
+    const next = groups[groups.indexOf(li.parentElement) + (up ? -1 : 1)];
+    if (!next) return;
+    if (up) next.append(li);
+    else next.prepend(li);
+  }
+  saveTree(li);
+  render();
+  els.folderList.querySelector(`.med-row[data-id="${CSS.escape(li.dataset.id)}"] .drag-handle`)?.focus();
+}
+
+// ---------- Folder dialog (new / edit) ----------
+let folderEditId = null; // null while making a new folder
+
+function openFolderDialog(id = null) {
+  const folder = allFolders().find((f) => f.id === id);
+  folderEditId = folder ? id : null;
+  els.folderDialogTitle.textContent = folder ? "Edit folder" : "New folder";
+  els.folderNameInput.value = folder?.name ?? "";
+  els.folderPickList.innerHTML = "";
+  const tabs = allTabs();
+  for (const tab of tabs) {
+    const inFolder = folderOf(tab.id);
+    const label = document.createElement("label");
+    label.className = "pick-row";
+    label.innerHTML = `<input type="checkbox" /><span class="pick-name"></span><span class="pick-where"></span>`;
+    label.querySelector("input").value = tab.id;
+    label.querySelector("input").checked = !!folder && inFolder === folder.id;
+    label.querySelector(".pick-name").textContent = tab.name;
+    // Ticking a medicine from another folder moves it here (see saveFolder)
+    if (inFolder && inFolder !== folder?.id) label.querySelector(".pick-where").textContent = `in ${shared.folders[inFolder].name}`;
+    els.folderPickList.append(label);
+  }
+  if (!tabs.length) els.folderPickList.innerHTML = `<p class="dialog-sub">No medicines yet. Add one with the + button first.</p>`;
+  showOverlay(els.folderDialog);
+  els.folderNameInput.focus();
+}
+
+els.folderNew.addEventListener("click", () => openFolderDialog());
+els.folderCancel.addEventListener("click", () => hideOverlay(els.folderDialog));
+els.folderDialog.addEventListener("click", (e) => {
+  if (e.target === els.folderDialog) hideOverlay(els.folderDialog);
+});
+
+els.folderForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  const name = els.folderNameInput.value.trim();
+  if (!name) return;
+  const meds = [...els.folderPickList.querySelectorAll("input:checked")].map((box) => box.value);
+  const id = folderEditId ?? "f" + randomId(10);
+  const createdAt = shared.folders?.[id]?.createdAt ?? Date.now();
+  saveFolder(id, { name, meds, createdAt });
+  hideOverlay(els.folderDialog);
+  render();
+  if (!folderEditId) showToast(`Folder ${name} made.`);
+});
+
+function confirmDeleteFolder(folder) {
+  if (!confirm(`Delete the folder ${folder.name}? The medicines in it stay.`)) return;
+  if (local.folder === folder.id) {
+    local.folder = null;
+    saveLocal();
+  }
+  deleteFolder(folder.id);
+  render();
+}
 
 // ---------- Share link with the other nurses ----------
 els.shareBtn.addEventListener("click", async () => {

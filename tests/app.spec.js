@@ -161,3 +161,103 @@ test.describe("standards", () => {
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   });
 });
+
+// ---------- Medicine name suggestions ----------
+// The add screen is behind sign-in, so these show it without signing in (nothing is saved).
+test.describe("medicine name suggestions", () => {
+  const input = (page) => page.locator("#add-name");
+  const list = (page) => page.locator("#add-suggest");
+  const options = (page) => page.getByRole("option");
+
+  test.beforeEach(async ({ page }) => {
+    await page.evaluate(() => {
+      document.body.classList.remove("locked");
+      document.getElementById("add-btn").click();
+    });
+    await expect(page.locator("#add-screen")).toBeVisible();
+  });
+
+  test("the list is big, with no repeats and every name fits the box", async ({ page }) => {
+    const names = await page.evaluate(async () => (await import("/medicines.js")).MEDICINES.map((m) => m.name));
+    expect(names.length).toBeGreaterThan(2000);
+    // "Sat-Isabgol" and "Sat Isabgol" count as the same; dots stay so "12.5" isn't "125"
+    const key = (n) => n.toLowerCase().replace(/[^a-z0-9.]/g, "");
+    const seen = new Map();
+    const repeats = names.filter((n) => seen.has(key(n)) || !seen.set(key(n), n));
+    expect(repeats).toEqual([]);
+    expect(names.filter((n) => n.length > 40)).toEqual([]);
+    expect(names.filter((n) => !n)).toEqual([]);
+  });
+
+  test("nothing shows until they type", async ({ page }) => {
+    await expect(input(page)).toBeFocused();
+    await expect(list(page)).toBeHidden();
+  });
+
+  test("typing shows matches, best first", async ({ page }) => {
+    await input(page).pressSequentially("dolo");
+    await expect(list(page)).toBeVisible();
+    await expect(options(page).first()).toContainText("Dolo");
+    await expect(input(page)).toHaveAttribute("aria-expanded", "true");
+  });
+
+  test("searching what's in it finds brands too", async ({ page }) => {
+    await input(page).pressSequentially("paracetamol");
+    await expect(options(page).first()).toContainText("Paracetamol");
+    await expect(list(page).getByRole("option", { name: /^Dolo 650/ })).toHaveCount(1);
+    await expect(list(page).getByRole("option", { name: /^Calpol 500/ })).toHaveCount(1);
+  });
+
+  test("shows 10 at a time and scrolls for the rest", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 900 });
+    await input(page).pressSequentially("a");
+    expect(await options(page).count()).toBeGreaterThan(10);
+    const { visible, scrollable } = await list(page).evaluate((ul) => ({
+      visible: Math.round(ul.clientHeight / ul.firstElementChild.offsetHeight),
+      scrollable: ul.scrollHeight > ul.clientHeight,
+    }));
+    expect(visible).toBe(10);
+    expect(scrollable).toBe(true);
+  });
+
+  test("tapping a suggestion fills the name", async ({ page }) => {
+    await input(page).pressSequentially("pan 4");
+    await list(page).getByRole("option", { name: /^Pan 40/ }).click();
+    await expect(input(page)).toHaveValue("Pan 40");
+    await expect(list(page)).toBeHidden();
+    await expect(page.locator("#add-summary")).toContainText("Pan 40");
+  });
+
+  test("arrow keys and Enter pick one; Escape closes", async ({ page }) => {
+    await input(page).pressSequentially("thyronorm");
+    await input(page).press("ArrowDown");
+    await expect(options(page).first()).toHaveAttribute("aria-selected", "true");
+    await input(page).press("Enter");
+    await expect(input(page)).toHaveValue("Thyronorm 12.5"); // numbers sort naturally
+    await input(page).pressSequentially("x");
+    await input(page).fill("");
+    await input(page).pressSequentially("telma");
+    await expect(list(page)).toBeVisible();
+    await input(page).press("Escape");
+    await expect(list(page)).toBeHidden();
+  });
+
+  test("any name can be typed, even one not on the list", async ({ page }) => {
+    await input(page).pressSequentially("Grandma's ginger tea");
+    await expect(list(page)).toBeHidden();
+    await expect(input(page)).toHaveValue("Grandma's ginger tea");
+    expect(await input(page).evaluate((el) => el.checkValidity())).toBe(true);
+  });
+
+  for (const theme of ["light", "dark"]) {
+    test(`accessibility (WCAG 2.1 AA): suggestions open, ${theme}`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: theme });
+      await page.waitForTimeout(400);
+      await input(page).pressSequentially("amlo");
+      await input(page).press("ArrowDown");
+      const results = await new AxeBuilder({ page }).include("#add-screen")
+        .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+      expect(results.violations.map((v) => `${v.id}: ${v.help} (${v.nodes.map((n) => n.target).join(", ")})`)).toEqual([]);
+    });
+  }
+});

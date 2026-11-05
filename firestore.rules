@@ -9,12 +9,14 @@ service cloud.firestore {
     }
     // PID "XXX-XXX" -> { patientId }. Create-only, so a taken PID can never be overwritten
     // (the app just draws another one), which keeps every PID unique.
+    // A guest's PID also has expireAt, so the daily clean-up job deletes it with the tracker.
     match /pids/{pid} {
       allow get: if request.auth != null;
       allow create: if request.auth != null && pid.size() == 7
-        && request.resource.data.keys().hasOnly(["patientId"])
+        && request.resource.data.keys().hasOnly(["patientId", "expireAt"])
         && request.resource.data.patientId is string
-        && request.resource.data.patientId.size() >= 16;
+        && request.resource.data.patientId.size() >= 16
+        && (!("expireAt" in request.resource.data) || request.resource.data.expireAt is timestamp);
       allow update, list, delete: if false;
     }
     // Each account (Google or guest) remembers its own patient, so signing in again opens it.
