@@ -1157,6 +1157,7 @@ function openPatient(id) {
     (snap) => {
       shared = snap.data() ?? {};
       if (!shared.ownerUid) claimPatient();
+      else syncOwnerName();
       if (!shared.patient?.pid) assignPid(); // new trackers, and older ones made before PIDs
       if (shared.doses) migrateDoses();
       rememberPatient();
@@ -1212,6 +1213,17 @@ function claimPatient() {
     if (user.isAnonymous) data.expireAt = newGuestExpiry = guestExpiry();
   }
   setDoc(patientRef, data, { merge: true }).catch(reportError);
+}
+
+// A Google account's own tracker always carries its Google name. Trackers claimed before (or
+// made with a typed name) kept that name, so the owner's every open puts the Google name back,
+// and a name changed in Google follows too. Guests keep the name they typed.
+function syncOwnerName() {
+  if (claimed || user.isAnonymous || shared.ownerUid !== user.uid) return;
+  claimed = true; // once per open, like claimPatient
+  const name = googleName(user);
+  if (shared.patient?.name === name) return;
+  updateDoc(patientRef, new FieldPath("patient", "name"), name).catch(reportError);
 }
 
 // Reserve a PID in pids/{pid}, then save it on the patient. The rules only allow creating a

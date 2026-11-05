@@ -377,3 +377,46 @@ test("deleting a folder can be undone; its medicines stay", async ({ page }) => 
   await page.locator("#toast-action").click();
   expect(await tree(page)).toEqual(["[Meds]", "[Morning]", "Dolo 650"]);
 });
+
+// Google sign-in through the Auth emulator's own popup (it stands in for Google's)
+async function signInGoogle(page, displayName, email) {
+  await page.goto("/?emulator");
+  const [popup] = await Promise.all([page.waitForEvent("popup"), page.locator("#login-btn").click()]);
+  await popup.getByText("Add new account").click();
+  await popup.locator("#display-name-input").fill(displayName);
+  await popup.locator("#email-input").fill(email);
+  await popup.getByRole("button", { name: /Sign in with Google/ }).click();
+}
+
+test("a Google account's own tracker shows the Google name, even an old one with a typed name", async ({ browser }, info) => {
+  // The emulator's stand-in Google window hides its form at phone size; the app side is the same
+  test.skip(info.project.name === "phone", "desktop only: the emulator's sign-in window");
+  const page = await newPage(browser);
+  const email = `r${crypto.randomUUID().slice(0, 8)}@example.com`;
+  await signInGoogle(page, "Real Name", email);
+  await expect(page.locator("#patient-name")).toHaveText("Real Name", { timeout: 20000 });
+  const id = new URL(page.url()).searchParams.get("patient");
+
+  // An older tracker: owned by this account, but still named what was typed back then
+  await admin().doc(`patients/${id}`).update({ "patient.name": "Typed Name" });
+  await expect(page.locator("#patient-name")).toHaveText("Typed Name");
+  await page.reload();
+  await expect(page.locator("#patient-name")).toHaveText("Real Name", { timeout: 20000 });
+  await expect.poll(async () => (await admin().doc(`patients/${id}`).get()).get("patient.name"), { timeout: 20000 })
+    .toBe("Real Name");
+
+  // Someone else's tracker opened by link keeps its own name
+  const other = await newPage(browser);
+  await signInGuest(other, "Other Patient");
+  await other.locator(".fab").click(); // a guest's tracker is saved on the first medicine
+  await other.locator("#add-name").fill("Pan 40");
+  await other.keyboard.press("Escape");
+  await other.locator("#add-form").getByRole("button", { name: "Add medicine" }).click();
+  await expect(other).toHaveURL(/patient=/, { timeout: 20000 });
+  const otherId = new URL(other.url()).searchParams.get("patient");
+  await expect.poll(async () => (await admin().doc(`patients/${otherId}`).get()).exists, { timeout: 20000 }).toBe(true);
+  await page.goto(`/?emulator&patient=${otherId}`);
+  await expect(page.locator("#patient-name")).toHaveText("Other Patient", { timeout: 20000 });
+  await page.waitForTimeout(1000);
+  expect((await admin().doc(`patients/${otherId}`).get()).get("patient.name")).toBe("Other Patient");
+});
