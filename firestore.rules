@@ -3,9 +3,20 @@ service cloud.firestore {
   match /databases/{database}/documents {
     // Each patient is one document. Its ID is a long random code that lives
     // in the share link, so only signed-in people with the link can read or write it.
+    // expireAt (when the daily clean-up deletes a guest's tracker) is only ever set as the tracker
+    // is created, so nobody with a link can mark someone else's tracker for deletion later.
+    // ownerUid can be set once (older trackers get it on first Google open) but never changed.
     match /patients/{patientId} {
-      allow get, create, update: if request.auth != null && patientId.size() >= 16;
+      allow get, create: if request.auth != null && patientId.size() >= 16;
+      allow update: if request.auth != null && patientId.size() >= 16
+        && unchanged("expireAt")
+        && (!("ownerUid" in resource.data) || unchanged("ownerUid"));
       allow list, delete: if false;
+    }
+    // Same presence before and after, and the same value if present
+    function unchanged(field) {
+      return (field in request.resource.data) == (field in resource.data)
+        && (!(field in resource.data) || request.resource.data[field] == resource.data[field]);
     }
     // PID "XXX-XXX" -> { patientId }. Create-only, so a taken PID can never be overwritten
     // (the app just draws another one), which keeps every PID unique.

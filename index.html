@@ -4,6 +4,15 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <title>Medicine Tracker</title>
+  <!-- Phone browser bar colour; matches --bg and follows the theme toggle (see below and app.js) -->
+  <meta name="theme-color" content="#0d1020" />
+  <!-- "Add to home screen": opens full screen with its own icon (manifest for Android, the rest for iPhone) -->
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="MedTracker" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black" />
   <!-- The header's pill icon, inline so there's no extra file to deploy -->
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235b5ff0'/%3E%3Cstop offset='1' stop-color='%2314b8a6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url(%23g)'/%3E%3Cg fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' transform='translate(3 3) scale(.75)'%3E%3Cpath d='M10.5 20.5 3.5 13.5a4.95 4.95 0 1 1 7-7l7 7a4.95 4.95 0 1 1-7 7Z'/%3E%3Cpath d='m8.5 8.5 7 7'/%3E%3C/g%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -12,11 +21,12 @@
   <!-- ?v=dev is replaced with the commit hash at deploy time, so an update never mixes old and new files -->
   <link rel="stylesheet" href="style.css?v=dev" />
   <script>
-    // Apply the saved theme before the page paints, so there's no flash.
-    try {
-      const t = localStorage.getItem("medicineTracker:theme");
-      if (t) document.documentElement.dataset.theme = t;
-    } catch {}
+    // Dark by default, whatever the phone's setting; light only if chosen with the moon/sun button.
+    // Set before the page paints, so there's no flash.
+    let theme = "dark";
+    try { theme = localStorage.getItem("medicineTracker:theme") || theme; } catch {}
+    document.documentElement.dataset.theme = theme;
+    if (theme === "light") document.querySelector('meta[name="theme-color"]').content = "#f3f5fb";
 
     // If app.js crashes before it starts (e.g. a stale cached copy right after an update),
     // reload once to fetch fresh files instead of sitting on "Loading…".

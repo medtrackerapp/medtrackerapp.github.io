@@ -244,6 +244,7 @@ function setReminder(key, time) {
 
 // Added while a folder is open, the medicine goes in that folder too.
 function addMedicine({ name, everyDays, dosesPerDay, notes, totalDays }, folderId) {
+  saveDraft(); // a new guest's first medicine is what saves their tracker
   const id = "m" + randomId(10);
   const medicine = { name, everyDays, dosesPerDay, notes, startDate: todayStr(), createdAt: Date.now() };
   const course = { startDays: totalDays, startDate: todayStr() };
@@ -258,6 +259,7 @@ function addMedicine({ name, everyDays, dosesPerDay, notes, totalDays }, folderI
 
 // Medicines ticked for this folder leave whatever folder they were in, so each is in one only.
 function saveFolder(id, folder) {
+  saveDraft();
   (shared.folders ??= {})[id] = folder; // apply locally first, like updateTabField
   const fields = [new FieldPath("folders", id), folder];
   for (const other of allFolders()) {
@@ -635,6 +637,8 @@ els.themeBtn.addEventListener("click", () => {
     ?? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
   const next = current === "dark" ? "light" : "dark";
   document.documentElement.dataset.theme = next;
+  // Phone browser bar follows the page background (--bg in style.css)
+  document.querySelector('meta[name="theme-color"]').content = next === "dark" ? "#0d1020" : "#f3f5fb";
   try { localStorage.setItem(THEME_KEY, next); } catch {}
 });
 
@@ -768,13 +772,16 @@ async function resolvePatient(u) {
   }
   const userRef = doc(db, "users", u.uid);
   const home = (await getDoc(userRef)).data()?.patientId ?? null;
+  // A guest without a saved tracker gets a draft: nothing is written until they add something
+  // (saveDraft), so someone just looking around leaves nothing in the database.
+  if (!fromLink && u.isAnonymous && !(home && await trackerExists(home))) return { id: randomId(), draft: true };
   const id = fromLink ?? home ?? randomId();
   if (!home) {
     const data = { patientId: id };
     if (u.isAnonymous) data.expireAt = guestExpiry();
     setDoc(userRef, data, { merge: true }).catch(reportError);
   }
-  return id;
+  return { id, draft: false };
 }
 
 let unsubscribe = null; // stops the current patient's snapshot listener
@@ -798,9 +805,36 @@ async function trackerExists(id) {
   return (await getDoc(doc(db, "patients", id))).exists();
 }
 
+// ---------- Guest draft (a new guest's tracker, only on this phone until the first change) ----------
+let draft = false;
+
+function openDraft(id) {
+  patientId = id;
+  patientRef = doc(db, "patients", id);
+  draft = true;
+  loadLocal();
+  // No ?patient= yet: the tracker doesn't exist, so the link would lead nowhere
+  history.replaceState(null, "", location.pathname);
+  shared = { patient: { name: googleName(user) }, builtinTabs: false };
+  render();
+}
+
+// The guest's first real change: save the tracker (expiring in 30 days, like the account's
+// pointer to it), then follow it live. The snapshot then gives it a PID with the same expiry.
+function saveDraft() {
+  if (!draft) return;
+  draft = false;
+  const expireAt = guestExpiry();
+  setDoc(doc(db, "users", user.uid), { patientId, expireAt }, { merge: true }).catch(reportError);
+  setDoc(patientRef, { patient: { name: shared.patient.name }, ownerUid: user.uid, builtinTabs: false, expireAt },
+    { merge: true }).catch(reportError);
+  openPatient(patientId);
+}
+
 function openPatient(id) {
   patientId = id;
   patientRef = doc(db, "patients", id);
+  draft = false;
   claimed = false;
   pidRequested = false;
   newGuestExpiry = null;
@@ -876,6 +910,7 @@ onAuthStateChanged(auth, async (u) => {
   unsubscribe?.();
   unsubscribe = null;
   shared = null;
+  draft = false;
   els.bootText.textContent = "Loading…";
   render();
   if (!u) return;
@@ -886,8 +921,10 @@ onAuthStateChanged(auth, async (u) => {
 async function startPatient(u) {
   render(); // a guest who just gave a name moves from the name form to the spinner
   try {
-    const id = await resolvePatient(u);
-    if (user === u) openPatient(id);
+    const { id, draft: isDraft } = await resolvePatient(u);
+    if (user !== u) return;
+    if (isDraft) openDraft(id);
+    else openPatient(id);
   } catch (err) {
     showConnectionError(err);
   }
@@ -937,7 +974,7 @@ els.infoBtn.addEventListener("click", () => {
     ? (user.isAnonymous && !user.displayName ? "Attendant"
       : [user.displayName, user.isAnonymous ? "Guest" : user.email].filter(Boolean).join(" · "))
     : "";
-  els.infoPid.textContent = shared?.patient?.pid ?? "Not assigned yet";
+  els.infoPid.textContent = shared?.patient?.pid ?? (draft ? "Given when you add the first medicine" : "Not assigned yet");
   const expires = shared?.expireAt?.toDate?.();
   els.infoExpiryBox.classList.toggle("hidden", !expires);
   if (expires) {
@@ -1667,6 +1704,7 @@ function confirmDeleteFolder(folder) {
 
 // ---------- Share link with the other nurses ----------
 els.shareBtn.addEventListener("click", async () => {
+  if (draft) return showToast("Add a medicine first, then share the link.");
   const url = location.href;
   if (navigator.share) {
     try {

@@ -28,6 +28,12 @@ test.afterEach(() => {
   expect(problems, "no script or console errors").toEqual([]);
 });
 
+// Dark is the default; light is what the moon/sun button saves.
+async function useTheme(page, theme) {
+  await page.evaluate((t) => { document.documentElement.dataset.theme = t; }, theme);
+  await page.waitForTimeout(400); // let the theme fade finish before checking contrast
+}
+
 // ---------- Loading ----------
 test.describe("loading", () => {
   test("signed out: spinner gives way to the welcome screen", async ({ page }) => {
@@ -125,8 +131,7 @@ test.describe("standards", () => {
 
   for (const [screen, theme] of [["welcome", "light"], ["welcome", "dark"], ["attendant", "light"], ["attendant", "dark"]]) {
     test(`accessibility (WCAG 2.1 AA): ${screen} screen, ${theme}`, async ({ page }) => {
-      await page.emulateMedia({ colorScheme: theme });
-      await page.waitForTimeout(400); // let the theme fade finish before checking contrast
+      await useTheme(page, theme);
       if (screen === "attendant") await page.getByRole("button", { name: "Attendant" }).click();
       const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
       const found = results.violations.map((v) => `${v.id}: ${v.help} (${v.nodes.map((n) => n.target).join(", ")})`);
@@ -147,18 +152,17 @@ test.describe("standards", () => {
     }
   });
 
-  test("dark mode follows the phone setting", async ({ page }) => {
-    const bg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+  test("dark mode is the default, even on a phone set to light", async ({ page }) => {
     await page.emulateMedia({ colorScheme: "light" });
-    const light = await bg();
-    await page.emulateMedia({ colorScheme: "dark" });
-    await expect.poll(bg).not.toBe(light); // the background fades over 0.3s
-  });
-
-  test("saved dark theme applies before the page paints", async ({ page }) => {
-    await page.evaluate(() => localStorage.setItem("medicineTracker:theme", "dark"));
     await page.reload();
     await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  });
+
+  test("a saved light theme applies before the page paints", async ({ page }) => {
+    await page.emulateMedia({ colorScheme: "dark" });
+    await page.evaluate(() => localStorage.setItem("medicineTracker:theme", "light"));
+    await page.reload();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   });
 });
 
@@ -251,8 +255,7 @@ test.describe("medicine name suggestions", () => {
 
   for (const theme of ["light", "dark"]) {
     test(`accessibility (WCAG 2.1 AA): suggestions open, ${theme}`, async ({ page }) => {
-      await page.emulateMedia({ colorScheme: theme });
-      await page.waitForTimeout(400);
+      await useTheme(page, theme);
       await input(page).pressSequentially("amlo");
       await input(page).press("ArrowDown");
       const results = await new AxeBuilder({ page }).include("#add-screen")
