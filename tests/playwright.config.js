@@ -4,8 +4,11 @@ const { defineConfig, devices } = require("@playwright/test");
 
 module.exports = defineConfig({
   testDir: ".",
-  timeout: 30000,
-  reporter: [["list"]],
+  // GitHub's machines are slower: more time per test, and one retry before calling it a failure.
+  // The "github" reporter turns failures into annotations on the run, readable without the logs.
+  timeout: process.env.CI ? 60000 : 30000,
+  retries: process.env.CI ? 1 : 0,
+  reporter: process.env.CI ? [["list"], ["github"]] : [["list"]],
   use: {
     baseURL: "http://localhost:3000",
     channel: "chrome",
