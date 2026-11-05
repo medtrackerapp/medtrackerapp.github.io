@@ -1,0 +1,67 @@
+name: Tests
+
+# Every push: the browser tests, the signed-in flows and the Firestore rules, all against the
+# Firebase emulators (never the real project). The deploy waits for this to pass (deploy.yml).
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            tests/package-lock.json
+            cleanup/package-lock.json
+
+      # The Firestore emulator runs on Java; the test server is Python's http.server
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache the emulator downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/firebase/emulators
+          key: firebase-emulators-${{ hashFiles('tests/package-lock.json') }}
+
+      # The app imports firebase-config.js; the tests use the emulators (?emulator) or never sign in
+      - name: Placeholder Firebase config
+        run: |
+          printf 'export const firebaseConfig = { apiKey: "demo-key", authDomain: "demo-medtracker.firebaseapp.com", projectId: "demo-medtracker" };\n' > firebase-config.js
+
+      - run: npm ci
+        working-directory: tests
+      - run: npm ci
+        working-directory: cleanup
+
+      - name: Run all tests against the emulators
+        run: npm run test:emulator
+        working-directory: tests
+
+      - name: Keep the report when something fails
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: tests/test-results
+          retention-days: 7

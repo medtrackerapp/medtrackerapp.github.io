@@ -1,5 +1,5 @@
 // Deletes what guests left behind once its expireAt date has passed (30 days after a guest made it):
-// their tracker (patients), its PID (pids) and their account's record (users).
+// their tracker (patients, with its days/ of ticked doses), its PID (pids) and their account's record (users).
 // Runs once a day from .github/workflows/cleanup.yml; the free alternative to Firestore TTL
 // policies, which need the paid plan. Only documents that have expireAt are ever touched, and
 // the app only sets it on trackers a guest made from scratch (claimPatient in app.js).
@@ -44,7 +44,9 @@ for (const name of COLLECTIONS) {
     count += page.size;
     if (!dryRun) {
       const writer = db.bulkWriter();
-      for (const snap of page.docs) writer.delete(snap.ref);
+      // A tracker's days/ (ticked doses) go with it; deleting just the doc would leave them behind
+      if (name === "patients") for (const snap of page.docs) await db.recursiveDelete(snap.ref, writer);
+      else for (const snap of page.docs) writer.delete(snap.ref);
       await writer.close();
     }
     if (page.size < 500) break;

@@ -3,11 +3,14 @@
   "private": true,
   "description": "Browser tests for the Medicine Tracker. Not deployed; the app itself has no build step.",
   "scripts": {
-    "test": "playwright test"
+    "test": "playwright test",
+    "test:emulator": "firebase emulators:exec --config ../firebase.json --only firestore,auth --project demo-medtracker \"playwright test\""
   },
   "devDependencies": {
     "@axe-core/playwright": "4.10.1",
     "@playwright/test": "1.49.1",
+    "firebase": "10.12.2",
+    "firebase-tools": "15.34.1",
     "html-validate": "8.29.0"
   }
 }

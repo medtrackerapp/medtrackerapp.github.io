@@ -12,6 +12,15 @@ service cloud.firestore {
         && unchanged("expireAt")
         && (!("ownerUid" in resource.data) || unchanged("ownerUid"));
       allow list, delete: if false;
+
+      // One doc per day of ticked doses (who gave each, when), so the patient doc doesn't grow
+      // forever. Same access as the patient: anyone signed in with the link. Never deleted by the app.
+      match /days/{day} {
+        allow read: if request.auth != null && patientId.size() >= 16;
+        allow create, update: if request.auth != null && patientId.size() >= 16
+          && day.matches("^[0-9]{4}-[0-9]{2}-[0-9]{2}$");
+        allow delete: if false;
+      }
     }
     // Same presence before and after, and the same value if present
     function unchanged(field) {

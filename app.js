@@ -1,9 +1,15 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
   initializeFirestore,
+  connectFirestoreEmulator,
   persistentLocalCache,
   persistentMultipleTabManager,
   doc,
+  collection,
+  query,
+  where,
+  documentId,
+  writeBatch,
   getDoc,
   onSnapshot,
   setDoc,
@@ -16,6 +22,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 import {
   getAuth,
+  connectAuthEmulator,
   onAuthStateChanged,
   GoogleAuthProvider,
   signInWithPopup,
@@ -42,6 +49,11 @@ function daysBetween(fromStr, toStr) {
   const [y1, m1, d1] = fromStr.split("-").map(Number);
   const [y2, m2, d2] = toStr.split("-").map(Number);
   return Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86400000);
+}
+
+function addDays(dateStr, n) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return todayStr(new Date(y, m - 1, d + n));
 }
 
 function shortDate(daysFromToday) {
@@ -80,12 +92,28 @@ let patientId = null;
 let patientRef = null;
 
 // ---------- Firebase ----------
-const app = initializeApp(firebaseConfig);
+// Tests (tests/emulator.spec.js) use local emulators: on localhost, ?emulator switches to a
+// throwaway demo project for the rest of the tab, so nothing touches the real database.
+const useEmulators = ["localhost", "127.0.0.1"].includes(location.hostname) && (() => {
+  try {
+    if (new URLSearchParams(location.search).has("emulator")) sessionStorage.setItem("medicineTracker:emulator", "1");
+    return sessionStorage.getItem("medicineTracker:emulator") === "1";
+  } catch {
+    return false;
+  }
+})();
+const app = initializeApp(useEmulators
+  ? { projectId: "demo-medtracker", apiKey: "demo-key", authDomain: "demo-medtracker.firebaseapp.com" }
+  : firebaseConfig);
 // Local cache lets the app keep working on spotty Wi-Fi; changes sync when back online.
 const db = initializeFirestore(app, {
   localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
 });
 const auth = getAuth(app);
+if (useEmulators) {
+  connectFirestoreEmulator(db, "127.0.0.1", 8085);
+  connectAuthEmulator(auth, "http://127.0.0.1:9099", { disableWarnings: true });
+}
 let user; // undefined until Firebase reports the sign-in state, then null or the Google user
 
 // ---------- State ----------
@@ -96,13 +124,17 @@ let user; // undefined until Firebase reports the sign-in state, then null or th
 //   builtins: { "4": { name, notes, everyDays, dosesPerDay, startDate, removed } } – nurse edits to 1x/4x/6x
 //   courses: { "4": { startDays, startDate }, "m3k…": … }  – days-left baseline per tab
 //   startDays, startDate          – old patient-wide days-left baseline (fallback for tabs without a course)
-//   doses: { "2026-10-30": { "4_0": true, ... } }  – keyed by date, so each day starts fresh
+//   doses: { "2026-10-30": { "4_0": true } } – legacy; moved into days/ on open (migrateDoses)
 //   reminders: { "4_0": "08:30" }
 //   medicines: { "m3k…": { name, everyDays, dosesPerDay, notes, startDate, createdAt } } – added via "+"
 //   order: ["m3k…", "4", …]       – tab order set by dragging on the Medicines screen
 //   folders: { "f9x…": { name, meds: ["m3k…", …], createdAt } } – a medicine is in one folder at most
 // Dose/reminder keys are `${tabId}_${doseIndex}`; tab IDs never contain "_".
+// Ticked doses live in their own small docs, one per day, so the patient doc stops growing:
+//   patients/{id}/days/{YYYY-MM-DD}: { "4_0": { by: "Priya", uid, at: Timestamp } }  (true if migrated)
 let shared = null; // null until the first snapshot arrives
+let days = {}; // the last HISTORY_DAYS of days/ docs, by date (see watchDays)
+const HISTORY_DAYS = 7;
 
 // Per-phone only (localStorage), per patient:
 // notified: "4_0" -> last date this phone alerted; folder: open folder id, null for all ("Meds")
@@ -154,8 +186,12 @@ function allTabs() {
   // Dragged order first; anything not in it yet (e.g. just added) keeps its place at the end.
   const order = shared?.order ?? [];
   const rank = (id) => (order.includes(id) ? order.indexOf(id) : order.length);
-  return [...builtins, ...custom].sort((a, b) => rank(a.id) - rank(b.id));
+  return [...builtins, ...custom].filter((t) => !hiddenTabs.has(t.id)).sort((a, b) => rank(a.id) - rank(b.id));
 }
+
+// Removed on this phone but still in its Undo window (see removeWithUndo)
+const hiddenTabs = new Set();
+const hiddenFolders = new Set();
 
 function findTab(id) {
   return allTabs().find((t) => t.id === id);
@@ -164,6 +200,7 @@ function findTab(id) {
 // ---------- Folders ----------
 function allFolders() {
   return Object.entries(shared?.folders ?? {})
+    .filter(([id]) => !hiddenFolders.has(id))
     .map(([id, f]) => ({ id, ...f, meds: f.meds ?? [] }))
     .sort((a, b) => a.createdAt - b.createdAt);
 }
@@ -196,10 +233,14 @@ function currentTab() {
   return tabs.find((t) => t.id === local.activeTab) ?? tabs[0];
 }
 
-function isDueToday(tab) {
+function isDueOn(tab, dateStr) {
   if (tab.everyDays <= 1) return true;
-  const elapsed = daysBetween(tab.startDate, todayStr());
+  const elapsed = daysBetween(tab.startDate, dateStr);
   return elapsed >= 0 && elapsed % tab.everyDays === 0;
+}
+
+function isDueToday(tab) {
+  return isDueOn(tab, todayStr());
 }
 
 function nextDueLabel(tab) {
@@ -219,8 +260,68 @@ function scheduleText(everyDays, dosesPerDay) {
   return `${plural(dosesPerDay, "dose")} ${everyText(everyDays)}`;
 }
 
-function isTaken(tabId, i) {
-  return !!shared?.doses?.[todayStr()]?.[`${tabId}_${i}`];
+// Ticks for a day: the days/ doc, plus any not yet moved out of the old doses map
+function dosesOn(dateStr) {
+  return { ...shared?.doses?.[dateStr], ...days[dateStr] };
+}
+
+// The tick: { by, uid, at } (who gave it, when), true for older ticks, or undefined
+function doseEntry(tabId, i, dateStr = todayStr()) {
+  return dosesOn(dateStr)[`${tabId}_${i}`];
+}
+
+function isTaken(tabId, i, dateStr = todayStr()) {
+  return !!doseEntry(tabId, i, dateStr);
+}
+
+// ---------- Due times (a dose's reminder time is when it's due) ----------
+function toMinutes(hhmm) {
+  const [h, m] = hhmm.split(":").map(Number);
+  return h * 60 + m;
+}
+
+function minutesNow() {
+  const d = new Date();
+  return d.getHours() * 60 + d.getMinutes();
+}
+
+function durationText(min) {
+  if (min < 60) return `${min} min`;
+  return `${Math.floor(min / 60)} h${min % 60 ? ` ${min % 60} min` : ""}`;
+}
+
+// Today's state of one dose: taken, overdue (past its time), upcoming (has a later time) or open (no time)
+function doseState(tab, i) {
+  const key = `${tab.id}_${i}`;
+  const entry = doseEntry(tab.id, i);
+  if (entry) return { kind: "taken", key, entry };
+  const time = shared.reminders?.[key];
+  if (!time) return { kind: "open", key };
+  const late = minutesNow() - toMinutes(time);
+  return late > 0 ? { kind: "overdue", key, time, late } : { kind: "upcoming", key, time, wait: -late };
+}
+
+// Every dose due today across all medicines (not just the open folder)
+function todaysDoses() {
+  return allTabs().filter(isDueToday)
+    .flatMap((tab) => Array.from({ length: tab.dosesPerDay }, (_, i) => ({ tab, i, ...doseState(tab, i) })));
+}
+
+function hasOverdue(tab) {
+  return isDueToday(tab) && Array.from({ length: tab.dosesPerDay }, (_, i) => doseState(tab, i).kind === "overdue").some(Boolean);
+}
+
+function givenText(entry) {
+  if (entry === true || !entry?.by) return "Taken";
+  const at = entry.at?.toDate?.();
+  return `Given by ${entry.by}${at ? ` · ${at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}`;
+}
+
+function doseStatus(state) {
+  if (state.kind === "taken") return { text: givenText(state.entry), cls: "" };
+  if (state.kind === "overdue") return { text: `Overdue · ${durationText(state.late)}`, cls: "overdue" };
+  if (state.kind === "upcoming") return { text: `Due at ${formatTime(state.time)}`, cls: "" };
+  return { text: "Not taken yet", cls: "" };
 }
 
 // ---------- Writes ----------
@@ -231,10 +332,33 @@ function reportError(err) {
 
 let justToggled = null; // animate only the dose that was just tapped
 
-function toggleDose(tabId, i) {
-  justToggled = `${tabId}_${i}`;
-  updateDoc(patientRef, new FieldPath("doses", todayStr(), `${tabId}_${i}`), !isTaken(tabId, i))
-    .catch(reportError);
+function myName() {
+  return user.displayName || (user.isAnonymous ? "Attendant" : user.email?.split("@")[0]) || "Someone";
+}
+
+function dayRef(dateStr) {
+  return doc(patientRef, "days", dateStr);
+}
+
+// Ticking records who gave the dose and when. Unticking offers Undo, since it wipes that record.
+function toggleDose(tab, i) {
+  const key = `${tab.id}_${i}`;
+  const today = todayStr();
+  const before = doseEntry(tab.id, i);
+  justToggled = key;
+  if (!before) {
+    setDoc(dayRef(today), { [key]: { by: myName(), uid: user.uid, at: Timestamp.now() } }, { merge: true })
+      .catch(reportError);
+    return;
+  }
+  setDoc(dayRef(today), { [key]: deleteField() }, { merge: true }).catch(reportError);
+  if (shared.doses?.[today]?.[key]) { // not migrated yet
+    updateDoc(patientRef, new FieldPath("doses", today, key), deleteField()).catch(reportError);
+  }
+  showToast(`${ordinal(i + 1)} dose of ${tab.name} marked not given.`, {
+    action: "Undo",
+    onAction: () => setDoc(dayRef(today), { [key]: before }, { merge: true }).catch(reportError),
+  });
 }
 
 function setReminder(key, time) {
@@ -370,6 +494,13 @@ const els = {
   allDone: document.getElementById("all-done"),
   notDue: document.getElementById("not-due"),
   notDueText: document.getElementById("not-due-text"),
+  history: document.getElementById("history"),
+  patientBtn: document.getElementById("patient-btn"),
+  patients: document.getElementById("patients"),
+  patientsClose: document.getElementById("patients-close"),
+  patientList: document.getElementById("patient-list"),
+  patientPidForm: document.getElementById("patient-pid-form"),
+  patientPidInput: document.getElementById("patient-pid-input"),
   doseList: document.getElementById("dose-list"),
   removeBtn: document.getElementById("remove-btn"),
   empty: document.getElementById("empty"),
@@ -419,6 +550,16 @@ const els = {
   addNotes: document.getElementById("add-notes"),
   addSummary: document.getElementById("add-summary"),
   toast: document.getElementById("toast"),
+  toastText: document.getElementById("toast-text"),
+  toastAction: document.getElementById("toast-action"),
+  confirm: document.getElementById("confirm"),
+  confirmTitle: document.getElementById("confirm-title"),
+  confirmText: document.getElementById("confirm-text"),
+  confirmOk: document.getElementById("confirm-ok"),
+  confirmCancel: document.getElementById("confirm-cancel"),
+  nextDose: document.getElementById("next-dose"),
+  nextDoseLabel: document.getElementById("next-dose-label"),
+  nextDoseText: document.getElementById("next-dose-text"),
   menuBtn: document.getElementById("menu-btn"),
   folderBar: document.getElementById("folder-bar"),
   folderName: document.getElementById("folder-name"),
@@ -473,6 +614,13 @@ function renderTabs(tabs, activeId) {
     }
 
     btn.append(name, count);
+    if (shared && hasOverdue(tab)) {
+      const dot = document.createElement("span");
+      dot.className = "tab-dot";
+      dot.title = "A dose is overdue";
+      btn.append(dot);
+      btn.setAttribute("aria-label", `${tab.name}, ${count.textContent}, overdue`);
+    }
     btn.addEventListener("click", () => selectTab(tab.id));
     els.tabs.append(btn);
   }
@@ -484,10 +632,138 @@ function renderTabs(tabs, activeId) {
   }
 }
 
+// ---------- History (last 7 days of the open medicine) ----------
+function dayLabel(dateStr, opts) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString([], opts);
+}
+
+// Each dose that day: given, missed (a past day), pending (today), or the whole day off / before it was added
+function historyDay(tab, dateStr) {
+  const added = tab.createdAt ? todayStr(new Date(tab.createdAt)) : null;
+  if (added && dateStr < added) return { kind: "before" };
+  if (!isDueOn(tab, dateStr)) return { kind: "off" };
+  const doses = Array.from({ length: tab.dosesPerDay }, (_, i) => {
+    const entry = doseEntry(tab.id, i, dateStr);
+    return { i, entry, kind: entry ? "given" : dateStr < todayStr() ? "missed" : "pending" };
+  });
+  return { kind: "due", doses };
+}
+
+function renderHistory(tab) {
+  const today = todayStr();
+  els.history.replaceChildren(...Array.from({ length: HISTORY_DAYS }, (_, n) => {
+    const date = addDays(today, n - HISTORY_DAYS + 1);
+    const day = historyDay(tab, date);
+    const long = dayLabel(date, { weekday: "short", day: "numeric", month: "short" });
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "history-day" + (date === today ? " today" : "");
+    const dots = document.createElement("span");
+    dots.className = "hdots";
+    if (day.kind === "due") {
+      for (const d of day.doses) {
+        const dot = document.createElement("span");
+        dot.className = `hdot ${d.kind}`;
+        dots.append(dot);
+      }
+    } else {
+      dots.innerHTML = `<span class="hdot off"></span>`;
+    }
+    const given = day.kind === "due" ? day.doses.filter((d) => d.entry).length : 0;
+    const summary = day.kind === "before" ? "not added yet" : day.kind === "off" ? "not due"
+      : `${given} of ${day.doses.length} given`;
+    btn.setAttribute("aria-label", `${long}: ${summary}`);
+    btn.innerHTML = `<span class="hday">${dayLabel(date, { weekday: "narrow" })}</span>`;
+    btn.append(dots);
+    btn.insertAdjacentHTML("beforeend", `<span class="hdate">${dayLabel(date, { day: "numeric" })}</span>`);
+    btn.addEventListener("click", () => {
+      const detail = day.kind !== "due" ? summary : day.doses.map((d) => `${ordinal(d.i + 1)}: ${
+        d.entry ? givenText(d.entry).replace(/^Given by /, "") : d.kind === "missed" ? "missed" : "not yet"}`).join(" · ");
+      showToast(`${long} — ${detail}`);
+    });
+    return btn;
+  }));
+}
+
+// Checkmark drawn in when a dose is ticked (see .dose-toggle.bump in style.css)
+const CHECK_ICON = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="3"
+  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path class="check-path" d="M5 12.5l4.5 4.5L19 7.5"/></svg>`;
+
+// The bar above the tabs: the most overdue dose, else the next one with a time. Across all medicines.
+function renderNextDose() {
+  const doses = shared && hasPatientDetails() ? todaysDoses() : [];
+  const overdue = doses.filter((d) => d.kind === "overdue").sort((a, b) => b.late - a.late);
+  const next = doses.filter((d) => d.kind === "upcoming").sort((a, b) => a.wait - b.wait)[0];
+  const pick = overdue[0] ?? next;
+  els.nextDose.classList.toggle("hidden", !pick);
+  if (!pick) return;
+  els.nextDose.classList.toggle("late", !!overdue.length);
+  const what = `${pick.tab.name} · ${ordinal(pick.i + 1)} dose`;
+  els.nextDoseLabel.textContent = overdue.length ? "Overdue" : "Next";
+  els.nextDoseText.textContent = overdue.length
+    ? `${what} · ${durationText(pick.late)} late${overdue.length > 1 ? ` · +${overdue.length - 1} more` : ""}`
+    : `${what} at ${formatTime(pick.time)} · in ${durationText(pick.wait)}`;
+  els.nextDose.onclick = () => {
+    if (!currentFolder()?.meds.includes(pick.tab.id)) local.folder = null;
+    selectTab(pick.tab.id);
+  };
+}
+
+// Times move on without any data changing: every 20 s, update what depends on the clock
+// (statuses, overdue dots, the next-dose bar) without rebuilding the dose cards,
+// which would close a reminder time picker someone has open.
+function refreshTimes() {
+  if (!hasPatientDetails() || document.body.classList.contains("locked")) return;
+  renderNextDose();
+  const tab = currentTab();
+  if (!tab) return;
+  renderTabs(visibleTabs(), tab.id);
+  els.doseList.querySelectorAll(".dose-status").forEach((el) => {
+    const i = Number(el.dataset.key.split("_")[1]);
+    const status = doseStatus(doseState(tab, i));
+    el.textContent = status.text;
+    el.closest(".dose-toggle").classList.toggle("overdue", status.cls === "overdue");
+  });
+}
+
+// ---------- Motion ----------
+// Animations only move or fade things (cheap on any phone) and are skipped for anyone who
+// turned on "reduce motion"; the CSS side is switched off by the rule at the end of style.css.
+function calm() {
+  return matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+// Runs a DOM change as a View Transition where the browser has them (the active tab glides,
+// the dose cards slide in from the side you moved towards), or just runs it.
+function transition(change, direction) {
+  if (!document.startViewTransition || calm()) return change();
+  document.documentElement.dataset.slide = direction ?? "";
+  document.startViewTransition(change).finished.finally(() => {
+    delete document.documentElement.dataset.slide;
+  });
+}
+
+// Animates elements from where they were to where a change puts them (FLIP), so rows glide
+// instead of jumping. `change` moves them in the DOM.
+function glide(elements, change) {
+  if (calm()) return change();
+  const before = new Map(elements.map((el) => [el, el.getBoundingClientRect().top]));
+  change();
+  for (const [el, top] of before) {
+    const dy = top - el.getBoundingClientRect().top;
+    if (dy) el.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }], { duration: 160, easing: "ease-out" });
+  }
+}
+
 function selectTab(id) {
+  const tabs = visibleTabs();
+  const from = tabs.findIndex((t) => t.id === currentTab()?.id);
+  const to = tabs.findIndex((t) => t.id === id);
   local.activeTab = id;
   saveLocal();
-  render();
+  if (from === to || from < 0 || to < 0) return render();
+  transition(render, to > from ? "left" : "right");
 }
 
 let renderedDate = todayStr();
@@ -524,6 +800,7 @@ function render() {
   if (notesTabId) renderNotes(); // another nurse may have changed or removed it
   if (scheduleTabId) renderSchedule();
   renderMeds();
+  renderNextDose();
 
   const empty = !tab;
   els.empty.classList.toggle("hidden", !empty);
@@ -556,7 +833,9 @@ function render() {
   const doneCount = doses.filter(Boolean).length;
   els.progressCount.textContent = due ? `${doneCount} of ${n} taken` : "Not due today";
   els.progressFill.style.width = due ? `${(doneCount / n) * 100}%` : "0%";
+  renderHistory(tab);
   els.allDone.classList.toggle("hidden", !due || doneCount !== n);
+  els.allDone.classList.toggle("celebrate", due && doneCount === n && justToggled?.startsWith(`${tab.id}_`));
   els.notDue.classList.toggle("hidden", due);
   if (!due) els.notDueText.textContent = `No doses today — next dose ${nextDueLabel(tab)}`;
 
@@ -564,19 +843,23 @@ function render() {
   doses.forEach((taken, i) => {
     const key = `${tab.id}_${i}`;
     const reminder = shared.reminders?.[key];
+    const status = doseStatus(doseState(tab, i));
 
     const li = document.createElement("li");
     li.className = "dose";
 
     const toggle = document.createElement("button");
-    toggle.className = "dose-toggle" + (taken ? " taken" : "") + (justToggled === key ? " bump" : "");
+    toggle.className = "dose-toggle" + (taken ? " taken" : "") + (status.cls ? ` ${status.cls}` : "")
+      + (justToggled === key ? " bump" : "");
+    toggle.setAttribute("aria-pressed", taken);
     toggle.innerHTML = `
-      <span class="dose-num">${taken ? "✓" : i + 1}</span>
+      <span class="dose-num">${taken ? CHECK_ICON : i + 1}</span>
       <span class="dose-text">
         <span class="dose-title">${ordinal(i + 1)} dose</span>
-        <span class="dose-status">${taken ? "Taken" : "Not taken yet"}</span>
+        <span class="dose-status" data-key="${key}"></span>
       </span>`;
-    toggle.addEventListener("click", () => toggleDose(tab.id, i));
+    toggle.querySelector(".dose-status").textContent = status.text; // has a nurse's name in it
+    toggle.addEventListener("click", () => toggleDose(tab, i));
 
     const rem = document.createElement("div");
     rem.className = "reminder";
@@ -712,15 +995,16 @@ els.pidBack.addEventListener("click", () => {
 });
 
 // Format as they type: "abcd" -> "ABC-D". The dash appears with the 4th character, so backspace never fights it.
-els.pidInput.addEventListener("input", () => {
-  const input = els.pidInput;
+function formatPidInput(e) {
+  const input = e.target;
   const charsBeforeCaret = input.value.slice(0, input.selectionStart).replace(/[\s-]/g, "").length;
   const raw = input.value.replace(/[\s-]/g, "").toUpperCase().slice(0, 6);
   input.value = raw.length > 3 ? `${raw.slice(0, 3)}-${raw.slice(3)}` : raw;
   // Keep the caret where it was, stepping over the dash
   const caret = Math.min(charsBeforeCaret, 6) + (charsBeforeCaret > 3 ? 1 : 0);
   input.setSelectionRange(caret, caret);
-});
+}
+els.pidInput.addEventListener("input", formatPidInput);
 
 els.pidForm.addEventListener("submit", (e) => {
   e.preventDefault();
@@ -736,18 +1020,21 @@ els.pidForm.addEventListener("submit", (e) => {
   }); // onAuthStateChanged then calls openByPid
 });
 
+// PID -> patient id, or null. The PID can outlive its tracker for a few hours (each is deleted
+// on its own after 30 days); opening it then would make a new empty tracker, so check it's there.
+async function findByPid(pid) {
+  const id = (await getDoc(doc(db, "pids", pid))).data()?.patientId;
+  return id && await trackerExists(id) ? id : null;
+}
+
 async function openByPid(u) {
   const pid = pendingPid;
   try {
-    const id = (await getDoc(doc(db, "pids", pid))).data()?.patientId;
-    // The PID can outlive its tracker for a few hours (each is deleted on its own after 30 days).
-    // Opening it then would make a new empty tracker in its place, so check it's still there.
-    const exists = !!id && await trackerExists(id);
+    const id = await findByPid(pid);
     if (user !== u || pendingPid !== pid) return; // signed out or backed out meanwhile
-    if (!exists) return showToast(`No patient found with PID ${pid}.`);
+    if (!id) return showToast(`No patient found with PID ${pid}.`);
     pendingPid = null;
     attendant = false;
-    unsubscribe?.();
     openPatient(id);
   } catch (err) {
     console.error(err);
@@ -771,7 +1058,8 @@ async function resolvePatient(u) {
     fromLink = null;
   }
   const userRef = doc(db, "users", u.uid);
-  const home = (await getDoc(userRef)).data()?.patientId ?? null;
+  userData = (await getDoc(userRef)).data() ?? {};
+  const home = userData.patientId ?? null;
   // A guest without a saved tracker gets a draft: nothing is written until they add something
   // (saveDraft), so someone just looking around leaves nothing in the database.
   if (!fromLink && u.isAnonymous && !(home && await trackerExists(home))) return { id: randomId(), draft: true };
@@ -785,7 +1073,9 @@ async function resolvePatient(u) {
 }
 
 let unsubscribe = null; // stops the current patient's snapshot listener
+let unwatchDays = null; // stops the days/ listener
 let claimed = false;
+let migrated = false;
 let pidRequested = false;
 let newGuestExpiry = null; // set when a guest makes a tracker, so its PID gets the same expiry
 
@@ -809,6 +1099,7 @@ async function trackerExists(id) {
 let draft = false;
 
 function openDraft(id) {
+  stopWatching();
   patientId = id;
   patientRef = doc(db, "patients", id);
   draft = true;
@@ -831,12 +1122,22 @@ function saveDraft() {
   openPatient(patientId);
 }
 
+function stopWatching() {
+  unsubscribe?.();
+  unwatchDays?.();
+  unsubscribe = unwatchDays = null;
+  days = {};
+}
+
 function openPatient(id) {
+  stopWatching();
   patientId = id;
   patientRef = doc(db, "patients", id);
   draft = false;
   claimed = false;
   pidRequested = false;
+  migrated = false;
+  remembered = false;
   newGuestExpiry = null;
   loadLocal();
   const params = new URLSearchParams(location.search);
@@ -849,11 +1150,46 @@ function openPatient(id) {
       shared = snap.data() ?? {};
       if (!shared.ownerUid) claimPatient();
       if (!shared.patient?.pid) assignPid(); // new trackers, and older ones made before PIDs
+      if (shared.doses) migrateDoses();
+      rememberPatient();
       render();
       checkReminders();
     },
     showConnectionError
   );
+  watchDays();
+}
+
+// Only the last week of days/ is loaded: today's ticks plus the history strip.
+// Called again at midnight so the window moves with the date.
+function watchDays() {
+  unwatchDays?.();
+  days = {};
+  const from = addDays(todayStr(), -(HISTORY_DAYS - 1));
+  unwatchDays = onSnapshot(
+    query(collection(patientRef, "days"), where(documentId(), ">=", from)),
+    (snap) => {
+      days = {};
+      snap.forEach((d) => { days[d.id] = d.data(); });
+      render();
+    },
+    showConnectionError
+  );
+}
+
+// Older trackers kept every day's ticks in one map on the patient doc, which grows until it hits
+// Firestore's 1 MB limit. Move the last week (all the app shows) into days/ and drop the map.
+// Phones still on an old version may write it again; then it simply moves again next open.
+function migrateDoses() {
+  if (migrated) return; // once per open
+  migrated = true;
+  const from = addDays(todayStr(), -(HISTORY_DAYS - 1));
+  const batch = writeBatch(db);
+  for (const [date, ticks] of Object.entries(shared.doses)) {
+    if (date >= from && Object.keys(ticks).length) batch.set(dayRef(date), ticks, { merge: true });
+  }
+  batch.update(patientRef, { doses: deleteField() });
+  batch.commit().catch(reportError);
 }
 
 // The first Google account to open a tracker takes it over, and its name replaces any name typed before.
@@ -907,8 +1243,8 @@ function showConnectionError(err) {
 
 onAuthStateChanged(auth, async (u) => {
   user = u;
-  unsubscribe?.();
-  unsubscribe = null;
+  userData = {};
+  stopWatching();
   shared = null;
   draft = false;
   els.bootText.textContent = "Loading…";
@@ -953,7 +1289,7 @@ document.querySelectorAll(".stepper").forEach((stepper) => {
 if (history.state?.screen) history.replaceState(null, "");
 
 function openScreen(el) {
-  el.classList.remove("hidden");
+  el.classList.remove("hidden", "closing");
   history.pushState({ screen: true }, "");
 }
 
@@ -963,9 +1299,11 @@ function closeScreen(el) {
 }
 
 window.addEventListener("popstate", () => {
-  els.addScreen.classList.add("hidden");
-  els.infoScreen.classList.add("hidden");
-  els.medsScreen.classList.add("hidden");
+  for (const el of [els.addScreen, els.infoScreen, els.medsScreen]) {
+    if (el.classList.contains("hidden")) continue;
+    el.classList.add("closing"); // slides out (style.css), then hides
+    setTimeout(() => el.classList.add("hidden"), calm() ? 0 : 180);
+  }
 });
 
 // ---------- Info ----------
@@ -1181,16 +1519,87 @@ els.addForm.addEventListener("submit", (e) => {
 els.removeBtn.addEventListener("click", () => {
   const tab = currentTab();
   if (!tab) return;
-  if (!confirm(`Remove ${tab.name}? It will disappear for all nurses.`)) return;
-  removeMedicine(tab);
-  selectTab(visibleTabs().find((t) => t.id !== tab.id)?.id ?? allTabs().find((t) => t.id !== tab.id)?.id ?? "");
+  removeWithUndo({
+    message: `${tab.name} removed for all nurses.`,
+    hide: () => {
+      local.activeTab = visibleTabs().find((t) => t.id !== tab.id)?.id ?? allTabs().find((t) => t.id !== tab.id)?.id ?? "";
+      hiddenTabs.add(tab.id);
+    },
+    commit: () => {
+      hiddenTabs.delete(tab.id);
+      removeMedicine(tab);
+    },
+    restore: () => {
+      hiddenTabs.delete(tab.id);
+      local.activeTab = tab.id;
+    },
+  });
+});
+
+// ---------- Undo ----------
+// Removing hides the thing on this phone at once but only deletes it for everyone once the
+// Undo toast is gone (or the app is left), so Undo is instant and nothing has to be rebuilt.
+let pending = null; // { commit } for a removal still in its Undo window
+
+function flushPending() {
+  const p = pending;
+  pending = null;
+  p?.commit();
+}
+
+function removeWithUndo({ message, hide, commit, restore }) {
+  flushPending();
+  hide();
+  saveLocal();
+  render();
+  showToast(message, {
+    action: "Undo",
+    onAction: () => {
+      restore();
+      saveLocal();
+      render();
+    },
+  });
+  pending = { commit }; // after showToast, which flushes whatever was pending before
+}
+
+addEventListener("pagehide", flushPending);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) flushPending();
+});
+
+// ---------- Confirm dialog (instead of the browser's plain confirm()) ----------
+let confirmAnswer = null; // resolves the open dialog's promise
+
+function askConfirm({ title, text, ok, cancel = "Cancel" }) {
+  confirmAnswer?.(false);
+  els.confirmTitle.textContent = title;
+  els.confirmText.textContent = text;
+  els.confirmOk.textContent = ok;
+  els.confirmCancel.textContent = cancel;
+  showOverlay(els.confirm);
+  els.confirmCancel.focus();
+  return new Promise((resolve) => { confirmAnswer = resolve; });
+}
+
+function answerConfirm(yes) {
+  const answer = confirmAnswer;
+  confirmAnswer = null;
+  hideOverlay(els.confirm);
+  answer?.(yes);
+}
+
+els.confirmOk.addEventListener("click", () => answerConfirm(true));
+els.confirmCancel.addEventListener("click", () => answerConfirm(false));
+els.confirm.addEventListener("click", (e) => {
+  if (e.target === els.confirm) answerConfirm(false);
 });
 
 // Overlays fade out before hiding (see .closing in style.css).
 function showOverlay(el) {
   clearTimeout(el.hideTimer);
   el.classList.remove("hidden", "closing");
-  els.toast.classList.add("hidden"); // don't let a toast sit on top of the overlay
+  hideToast(); // don't let a toast sit on top of the overlay
 }
 
 function hideOverlay(el) {
@@ -1252,10 +1661,11 @@ function openNotes(id = currentTab()?.id) {
   showOverlay(els.notes);
 }
 
-function closeNotes(force = false) {
+async function closeNotes(force = false) {
   const saved = findTab(notesTabId)?.notes?.trim() ?? "";
-  if (!force && notesEditing && els.notesInput.value.trim() !== saved
-      && !confirm("Discard your changes to these notes?")) return;
+  if (!force && notesEditing && els.notesInput.value.trim() !== saved && !(await askConfirm({
+    title: "Discard changes?", text: "Your changes to these notes haven't been saved.", ok: "Discard", cancel: "Keep editing",
+  }))) return;
   notesTabId = null;
   notesEditing = false;
   hideOverlay(els.notes);
@@ -1341,10 +1751,11 @@ function openSchedule(id = currentTab()?.id) {
   showOverlay(els.schedule);
 }
 
-function closeSchedule(force = false) {
+async function closeSchedule(force = false) {
   const tab = findTab(scheduleTabId);
-  if (!force && scheduleEditing && tab && scheduleChanges(tab).length
-      && !confirm("Discard your changes to this schedule?")) return;
+  if (!force && scheduleEditing && tab && scheduleChanges(tab).length && !(await askConfirm({
+    title: "Discard changes?", text: "Your changes to this schedule haven't been saved.", ok: "Discard", cancel: "Keep editing",
+  }))) return;
   scheduleTabId = null;
   scheduleEditing = false;
   hideOverlay(els.schedule);
@@ -1381,8 +1792,10 @@ els.scheduleDiscard.addEventListener("click", () => {
 
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
-  if (!els.rename.classList.contains("hidden")) hideOverlay(els.rename);
+  if (!els.confirm.classList.contains("hidden")) answerConfirm(false);
+  else if (!els.rename.classList.contains("hidden")) hideOverlay(els.rename);
   else if (!els.folderDialog.classList.contains("hidden")) hideOverlay(els.folderDialog);
+  else if (!els.patients.classList.contains("hidden")) closePatients();
   else if (notesTabId) closeNotes();
   else if (scheduleTabId) closeSchedule();
 });
@@ -1399,6 +1812,8 @@ const ICONS = {
   schedule: svg(`<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>`),
   notes: svg(`<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>`),
   trash: svg(`<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/>`),
+  user: svg(`<circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"/>`),
+  close: svg(`<path d="M18 6 6 18M6 6l12 12"/>`),
 };
 
 function rowButton(icon, label, onClick, extraClass = "") {
@@ -1574,13 +1989,14 @@ function startDrag(e, li) {
 function placeRow(li, x, y) {
   const target = document.elementFromPoint(x, y)?.closest(".med-row, .tree-item > .row, .group-label, .med-group");
   if (!target || !els.folderList.contains(target)) return false;
+  const others = [...els.folderList.querySelectorAll(".med-row:not(.dragging)")];
   if (target.classList.contains("med-row")) {
     if (y > middle(target)) {
       if (target.nextElementSibling === li) return false;
-      target.after(li);
+      glide(others, () => target.after(li));
     } else {
       if (target.previousElementSibling === li) return false;
-      target.before(li);
+      glide(others, () => target.before(li));
     }
     return true;
   }
@@ -1590,7 +2006,7 @@ function placeRow(li, x, y) {
   const group = isGroup ? target : target.parentElement.querySelector(".med-group");
   if (!group || group === li.parentElement) return false;
   if (isGroup && group.querySelector(".med-row")) return false;
-  group.prepend(li);
+  glide(others, () => group.prepend(li));
   return true;
 }
 
@@ -1617,12 +2033,18 @@ function endDrag() {
   removeEventListener("pointercancel", endDrag);
   if (!drag) return;
   const { li, moved } = drag;
-  li.classList.remove("dragging");
+  const offset = li.style.transform;
   li.style.transform = "";
   els.folderList.classList.remove("drag-active");
-  drag = null;
-  if (moved) saveTree(li);
-  render();
+  const settle = offset && !calm()
+    ? li.animate([{ transform: offset }, { transform: "none" }], { duration: 160, easing: "ease-out" }).finished
+    : Promise.resolve();
+  settle.finally(() => {
+    li.classList.remove("dragging");
+    drag = null;
+    if (moved) saveTree(li);
+    render();
+  });
 }
 
 // Up/Down move one place; at the edge of a folder they step into the folder above or below.
@@ -1693,14 +2115,137 @@ els.folderForm.addEventListener("submit", (e) => {
 });
 
 function confirmDeleteFolder(folder) {
-  if (!confirm(`Delete the folder ${folder.name}? The medicines in it stay.`)) return;
-  if (local.folder === folder.id) {
-    local.folder = null;
-    saveLocal();
+  const wasOpen = local.folder === folder.id;
+  removeWithUndo({
+    message: `Folder ${folder.name} deleted. Its medicines stay.`,
+    hide: () => {
+      hiddenFolders.add(folder.id);
+      if (wasOpen) local.folder = null;
+    },
+    commit: () => {
+      hiddenFolders.delete(folder.id);
+      deleteFolder(folder.id);
+    },
+    restore: () => {
+      hiddenFolders.delete(folder.id);
+      if (wasOpen) local.folder = folder.id;
+    },
+  });
+}
+
+// ---------- Patients (switch between trackers) ----------
+// Trackers this account opened recently. Google accounts keep the list in users/{uid}.recent so
+// it follows them to other phones; guests and attendants keep it on this phone only, so they
+// leave nothing extra in the database.
+const RECENT_MAX = 10;
+let userData = {}; // users/{uid} as read at sign-in: patientId (their own tracker), recent
+let remembered = false; // this open has been added to the list
+
+function recentKey() {
+  return `medicineTracker:recent:${user.uid}`;
+}
+
+function recentMap() {
+  if (!user.isAnonymous) return { ...userData.recent };
+  try {
+    return JSON.parse(localStorage.getItem(recentKey())) ?? {};
+  } catch {
+    return {};
   }
-  deleteFolder(folder.id);
+}
+
+function saveRecent(map) {
+  // Keep the newest few, but never drop the account's own tracker
+  const keep = Object.entries(map).sort((a, b) => b[1].at - a[1].at)
+    .filter(([id], n) => n < RECENT_MAX || id === userData.patientId);
+  map = Object.fromEntries(keep);
+  if (user.isAnonymous) {
+    try { localStorage.setItem(recentKey(), JSON.stringify(map)); } catch {}
+    return;
+  }
+  userData.recent = map;
+  // mergeFields replaces the whole list, so dropped entries really go
+  setDoc(doc(db, "users", user.uid), { recent: map }, { mergeFields: ["recent"] }).catch(reportError);
+}
+
+// On each snapshot: add or refresh the open tracker in the list (written only when something changed)
+function rememberPatient() {
+  if (draft || !shared?.patient?.name) return;
+  const map = recentMap();
+  const prev = map[patientId];
+  const entry = { name: shared.patient.name, pid: shared.patient.pid ?? null, at: remembered ? prev?.at ?? Date.now() : Date.now() };
+  remembered = true;
+  if (prev && prev.name === entry.name && prev.pid === entry.pid && prev.at === entry.at) return;
+  map[patientId] = entry;
+  saveRecent(map);
+}
+
+function renderPatients() {
+  const list = Object.entries(recentMap()).map(([id, r]) => ({ id, ...r })).sort((a, b) => b.at - a.at);
+  if (!list.some((p) => p.id === patientId) && shared?.patient?.name) {
+    list.unshift({ id: patientId, name: shared.patient.name, pid: shared.patient.pid });
+  }
+  els.patientList.replaceChildren(...list.map((p) => {
+    const li = document.createElement("li");
+    const current = p.id === patientId;
+    li.className = "row" + (current ? " active" : "");
+    const meta = [p.pid ? `PID ${p.pid}` : null, p.id === userData.patientId ? "Your tracker" : null, current ? "Open now" : null]
+      .filter(Boolean).join(" · ");
+    li.append(rowMain("user", p.name, meta, () => switchPatient(p.id), current ? "main" : ""));
+    if (!current && p.id !== userData.patientId) {
+      li.append(rowButton("close", `Remove ${p.name} from this list`, () => {
+        const map = recentMap();
+        delete map[p.id];
+        saveRecent(map);
+        renderPatients();
+      }));
+    }
+    return li;
+  }));
+}
+
+function openPatients() {
+  if (draft || !hasPatientDetails()) return;
+  els.patientPidInput.value = "";
+  renderPatients();
+  showOverlay(els.patients);
+}
+
+function closePatients() {
+  hideOverlay(els.patients);
+}
+
+function switchPatient(id) {
+  closePatients();
+  if (id === patientId) return;
+  flushPending(); // a removal waiting for Undo belongs to the tracker being left
+  openPatient(id);
   render();
 }
+
+els.patientBtn.addEventListener("click", openPatients);
+els.patientsClose.addEventListener("click", closePatients);
+els.patients.addEventListener("click", (e) => {
+  if (e.target === els.patients) closePatients();
+});
+els.patientPidInput.addEventListener("input", formatPidInput);
+els.patientPidForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const pid = normalizePid(els.patientPidInput.value);
+  if (!pid) return showToast("A PID has 6 characters, like ABC-D#3.");
+  const submit = els.patientPidForm.querySelector("button");
+  submit.disabled = true;
+  try {
+    const id = await findByPid(pid);
+    if (!id) return showToast(`No patient found with PID ${pid}.`);
+    switchPatient(id);
+  } catch (err) {
+    console.error(err);
+    showToast("Couldn't look up that PID — check your connection and try again.");
+  } finally {
+    submit.disabled = false;
+  }
+});
 
 // ---------- Share link with the other nurses ----------
 els.shareBtn.addEventListener("click", async () => {
@@ -1727,12 +2272,35 @@ function requestNotificationPermission() {
   }
 }
 
-function showToast(msg) {
-  els.toast.textContent = msg;
+// A message at the bottom; with an action (Undo) it stays 6 s, otherwise 10 s.
+let toastAction = null;
+
+function showToast(msg, { action, onAction } = {}) {
+  flushPending(); // a new message replaces any Undo still on screen
+  els.toastText.textContent = msg;
+  els.toastAction.textContent = action ?? "";
+  els.toastAction.classList.toggle("hidden", !action);
+  toastAction = onAction ?? null;
   els.toast.classList.remove("hidden");
   clearTimeout(showToast.timer);
-  showToast.timer = setTimeout(() => els.toast.classList.add("hidden"), 10000);
+  showToast.timer = setTimeout(hideToast, action ? 6000 : 10000);
 }
+
+function hideToast() {
+  clearTimeout(showToast.timer);
+  els.toast.classList.add("hidden");
+  toastAction = null;
+  flushPending();
+}
+
+els.toastAction.addEventListener("click", () => {
+  const act = toastAction;
+  toastAction = null;
+  pending = null; // the action (Undo) replaces committing the removal
+  clearTimeout(showToast.timer);
+  els.toast.classList.add("hidden");
+  act?.();
+});
 
 function notify(title, body) {
   if ("Notification" in window && Notification.permission === "granted") {
@@ -1768,7 +2336,11 @@ window.appStarted = true; // tells the reload-on-crash guard in index.html that 
 render(); // the patient loads once onAuthStateChanged reports who's signed in
 
 setInterval(() => {
-  if (todayStr() !== renderedDate) render(); // new day → everything shows red again
+  if (todayStr() !== renderedDate) { // new day → everything shows red again
+    if (unwatchDays) watchDays();
+    render();
+  }
+  refreshTimes();
   checkReminders();
 }, 20000);
 

@@ -11,3 +11,6 @@ CLAUDE.local.md
 # Playwright output
 test-results/
 playwright-report/
+
+# Firebase emulator logs
+*-debug.log
