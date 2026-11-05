@@ -266,3 +266,28 @@ test.describe("medicine name suggestions", () => {
     });
   }
 });
+
+// ---------- Add medicine form ----------
+test.describe("add medicine form", () => {
+  test.beforeEach(async ({ page }) => {
+    await page.evaluate(() => {
+      document.body.classList.remove("locked");
+      document.getElementById("add-btn").click();
+    });
+    await expect(page.locator("#add-screen")).toBeVisible();
+  });
+
+  test("How often is spelled out in words", async ({ page }) => {
+    const every = page.locator("#add-every");
+    const words = page.locator("#add-every-unit");
+    await expect(words).toHaveText("every day");
+    for (const [n, text] of [["2", "every other day"], ["3", "every 3 days"], ["7", "once a week"], ["14", "every 2 weeks"]]) {
+      await every.fill(n);
+      await expect(words).toHaveText(text);
+    }
+    await every.fill("2");
+    await expect(page.locator("#add-summary")).toContainText("1 dose every other day");
+    await page.getByRole("button", { name: "More days apart" }).click();
+    await expect(words).toHaveText("every 3 days");
+  });
+});

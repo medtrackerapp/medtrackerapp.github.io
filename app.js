@@ -252,8 +252,19 @@ function plural(n, word) {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
+// How often, in words: the frequency number alone ("2") was hard for people to read
 function everyText(everyDays) {
-  return everyDays === 1 ? "every day" : `every ${everyDays} days`;
+  if (everyDays === 1) return "every day";
+  if (everyDays === 2) return "every other day";
+  if (everyDays === 7) return "once a week";
+  if (everyDays % 7 === 0) return `every ${everyDays / 7} weeks`;
+  return `every ${everyDays} days`;
+}
+
+// Live wording next to the "How often" number on the add and schedule forms
+function updateEveryUnit(input, unit) {
+  const n = readNumber(input);
+  unit.textContent = n ? everyText(n) : "";
 }
 
 function scheduleText(everyDays, dosesPerDay) {
@@ -525,6 +536,7 @@ const els = {
   statDosesMeta: document.getElementById("stat-doses-meta"),
   schedDays: document.getElementById("sched-days"),
   schedEvery: document.getElementById("sched-every"),
+  schedEveryUnit: document.getElementById("sched-every-unit"),
   schedDoses: document.getElementById("sched-doses"),
   notes: document.getElementById("notes"),
   notesTitle: document.getElementById("notes-title"),
@@ -544,6 +556,7 @@ const els = {
   addName: document.getElementById("add-name"),
   addSuggest: document.getElementById("add-suggest"),
   addEvery: document.getElementById("add-every"),
+  addEveryUnit: document.getElementById("add-every-unit"),
   addDoses: document.getElementById("add-doses"),
   addDuration: document.getElementById("add-duration"),
   addUnit: document.getElementById("add-unit"),
@@ -671,7 +684,7 @@ function renderHistory(tab) {
       dots.innerHTML = `<span class="hdot off"></span>`;
     }
     const given = day.kind === "due" ? day.doses.filter((d) => d.entry).length : 0;
-    const summary = day.kind === "before" ? "not added yet" : day.kind === "off" ? "not due"
+    const summary = day.kind === "before" ? "No History" : day.kind === "off" ? "not due"
       : `${given} of ${day.doses.length} given`;
     btn.setAttribute("aria-label", `${long}: ${summary}`);
     btn.innerHTML = `<span class="hday">${dayLabel(date, { weekday: "narrow" })}</span>`;
@@ -1474,6 +1487,7 @@ els.addUnit.querySelectorAll("button").forEach((b) =>
 );
 
 function updateAddSummary() {
+  updateEveryUnit(els.addEvery, els.addEveryUnit);
   const name = els.addName.value.trim() || "This medicine";
   const every = readNumber(els.addEvery) ?? 1;
   const doses = readNumber(els.addDoses) ?? 1;
@@ -1713,7 +1727,8 @@ function renderSchedule() {
   els.statDays.textContent = left == null ? "Not set" : plural(left, "day");
   els.statDaysMeta.textContent = left == null ? "Tap Edit to set how long it's taken"
     : left === 0 ? "Course finished" : `Last day ${shortDate(left - 1)}`;
-  els.statEvery.textContent = everyText(tab.everyDays).replace(/^e/, "E");
+  const every = everyText(tab.everyDays);
+  els.statEvery.textContent = every[0].toUpperCase() + every.slice(1);
   els.statEveryMeta.textContent = isDueToday(tab) ? "Due today" : `Next dose ${nextDueLabel(tab)}`;
   els.statDoses.textContent = `${plural(tab.dosesPerDay, "dose")} a day`;
   els.statDosesMeta.textContent = "On each dose day";
@@ -1780,10 +1795,13 @@ els.scheduleEditBtn.addEventListener("click", () => {
     scheduleEditing = true;
     els.schedDays.value = daysLeft(tab.id) ?? "";
     els.schedEvery.value = tab.everyDays;
+    updateEveryUnit(els.schedEvery, els.schedEveryUnit);
     els.schedDoses.value = tab.dosesPerDay;
     renderSchedule();
   }
 });
+
+els.schedEvery.addEventListener("input", () => updateEveryUnit(els.schedEvery, els.schedEveryUnit));
 
 els.scheduleDiscard.addEventListener("click", () => {
   scheduleEditing = false;

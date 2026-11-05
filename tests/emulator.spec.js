@@ -142,8 +142,9 @@ test("unticking a dose can be undone", async ({ page }) => {
 // ---------- Overdue and next dose ----------
 test("a dose past its time shows as overdue, and the bar shows what's next", async ({ page }) => {
   const now = new Date();
-  test.skip(now.getHours() === 0 && now.getMinutes() < 31 || now.getHours() === 23 && now.getMinutes() > 28,
-    "needs times earlier and later today");
+  const minutes = now.getHours() * 60 + now.getMinutes();
+  // Reminder times are times of day: 30 min ago and 90 min ahead must both still be today
+  test.skip(minutes < 31 || minutes > 24 * 60 - 92, "needs times earlier and later today");
   watch(page);
   await signInGuest(page, "Time Nurse");
   await addMedicine(page, "Augmentin 625", 2);
@@ -179,7 +180,7 @@ test("the last 7 days show each dose, today included", async ({ page }) => {
   await expect(todayCol.locator(".hdot.given")).toHaveCount(1);
   await expect(todayCol.locator(".hdot.pending")).toHaveCount(1);
   // Days before the medicine was added are marked as such
-  await expect(page.locator("#history .history-day").first()).toHaveAttribute("aria-label", /not added yet$/);
+  await expect(page.locator("#history .history-day").first()).toHaveAttribute("aria-label", /No History$/);
   await todayCol.click();
   await expect(page.locator("#toast-text")).toContainText("1st: History Nurse");
 });

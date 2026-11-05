@@ -975,6 +975,8 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
 }
 .stepper button:active { transform: scale(0.94); }
 .stepper-unit { color: var(--muted); font-weight: 600; margin-left: 4px; }
+/* "every other day": the How often number in words, so it reads at a glance */
+.stepper-unit.every-unit { flex: 1 1 auto; min-width: 0; color: var(--text); font-weight: 700; }
 
 /* Days / Weeks toggle */
 .segmented {
