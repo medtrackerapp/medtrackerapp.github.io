@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "cleanup": "node cleanup.js",
-    "rename-owners": "node rename-owners.js"
+    "rename-owners": "node rename-owners.js",
+    "users": "node list-users.js"
   },
   "dependencies": {
     "firebase-admin": "13.4.0"

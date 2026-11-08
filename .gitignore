@@ -14,3 +14,9 @@ playwright-report/
 
 # Firebase emulator logs
 *-debug.log
+
+# Service account key and the users table (cleanup/list-users.js), local only
+cleanup/*.json
+!cleanup/package.json
+!cleanup/package-lock.json
+cleanup/users.csv

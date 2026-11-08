@@ -357,6 +357,35 @@ test("rename-owners puts each Google account's name on its tracker", async ({}, 
   expect((await db.doc(`users/nur${tag}`).get()).get("recent")).toEqual({ [p("own")]: { name: "Anuj Mishra", at: 2 } });
 });
 
+// ---------- Table of Google accounts (cleanup/list-users.js) ----------
+test("list-users tabulates Google accounts with their own tracker", async ({}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "data check, once is enough");
+  const db = admin();
+  const req = createRequire(path.join(CLEANUP, "package.json"));
+  const auth = req("firebase-admin/auth").getAuth(req("firebase-admin/app").getApps()[0]);
+  const tag = crypto.randomBytes(6).toString("hex");
+  const uid = `lst${tag}`;
+  await auth.importUsers([{ uid, displayName: "Table, \"Person\"", email: `${uid}@example.com`,
+    providerData: [{ uid: `g${uid}`, providerId: "google.com", email: `${uid}@example.com` }] }]);
+  await db.doc(`users/${uid}`).set({ patientId: `${uid}000000000` });
+  await db.doc(`patients/${uid}000000000`).set({ patient: { name: "Table Tracker", pid: "TBL-123" }, ownerUid: uid,
+    medicines: { m1: { name: "Dolo" }, m2: { name: "Pan" } } });
+
+  const { privateKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const keyFile = testInfo.outputPath("key.json");
+  require("fs").writeFileSync(keyFile, JSON.stringify({
+    type: "service_account", project_id: PROJECT, client_email: `test@${PROJECT}.iam.gserviceaccount.com`,
+    private_key: privateKey.export({ type: "pkcs8", format: "pem" }),
+  }));
+  const cwd = testInfo.outputPath("run");
+  require("fs").mkdirSync(cwd, { recursive: true });
+  const out = execFileSync("node", [path.join(CLEANUP, "list-users.js"), keyFile], { cwd, encoding: "utf8" });
+  expect(out).toContain("Saved users.csv");
+  const csv = require("fs").readFileSync(path.join(cwd, "users.csv"), "utf8");
+  expect(csv).toContain(`"Table, ""Person""","${uid}@example.com"`);
+  expect(csv).toContain(`"Table Tracker","TBL-123","2","yes"`);
+});
+
 // ---------- Medicines screen: folders and dragging ----------
 async function makeFolder(page, name, meds) {
   await page.locator("#folder-new").click();
