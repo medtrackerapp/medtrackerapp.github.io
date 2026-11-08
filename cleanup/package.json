@@ -4,7 +4,8 @@
   "description": "Daily job (GitHub Actions) that deletes guest trackers, PIDs and user records past their expireAt date.",
   "type": "module",
   "scripts": {
-    "cleanup": "node cleanup.js"
+    "cleanup": "node cleanup.js",
+    "rename-owners": "node rename-owners.js"
   },
   "dependencies": {
     "firebase-admin": "13.4.0"

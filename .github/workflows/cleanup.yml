@@ -2,7 +2,12 @@ name: Clean up expired guest data
 
 # Once a day, delete guest trackers, PIDs and user records whose expireAt has passed
 # (see cleanup/cleanup.js). Free alternative to Firestore TTL, which needs the paid plan.
+# Then put each Google account's name on its tracker (cleanup/rename-owners.js).
 on:
+  # Also right away when the rename script changes, so old trackers don't wait for the night
+  push:
+    branches: [main]
+    paths: [cleanup/rename-owners.js]
   schedule:
     - cron: "30 21 * * *" # 03:00 India time
   workflow_dispatch:
@@ -42,3 +47,9 @@ jobs:
           # Scheduled runs delete for real; a manual run is a dry run unless unticked
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
         run: npm run cleanup
+
+      - name: Put Google names on trackers
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '1' || '0' }}
+        run: npm run rename-owners

@@ -298,6 +298,59 @@ test("the clean-up deletes only expired guest data, with its daily records", asy
   expect((await db.doc(`patients/ggl${tag}0000000`).get()).exists).toBe(true);
 });
 
+// ---------- Google names on old trackers (cleanup/rename-owners.js) ----------
+test("rename-owners puts each Google account's name on its tracker", async ({}, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "data check, once is enough");
+  const db = admin();
+  const req = createRequire(path.join(CLEANUP, "package.json"));
+  const { getAuth } = req("firebase-admin/auth");
+  const auth = getAuth(req("firebase-admin/app").getApps()[0]);
+  const tag = crypto.randomBytes(6).toString("hex");
+  const google = (uid, displayName) => ({
+    uid, displayName, email: `${uid}@example.com`,
+    providerData: [{ uid: `g${uid}`, providerId: "google.com", displayName, email: `${uid}@example.com` }],
+  });
+  const r = await auth.importUsers([
+    google(`own${tag}`, "Anuj Mishra"), google(`hom${tag}`, "Home Owner"), google(`nur${tag}`, "Nurse Two"),
+    google(`aa${tag}`, "Shared A"), google(`bb${tag}`, "Shared B"),
+  ]);
+  expect(r.failureCount).toBe(0);
+  const guest = await auth.createUser({ uid: `gst${tag}` }); // no provider: a guest
+  const p = (n) => `${n}${tag}00000000`;
+
+  await db.doc(`patients/${p("own")}`).set({ patient: { name: "anuj typed", pid: "AAA-AAA" }, ownerUid: `own${tag}` });
+  await db.doc(`patients/${p("gst")}`).set({ patient: { name: "Old typed" }, ownerUid: guest.uid });
+  await db.doc(`patients/${p("non")}`).set({ patient: { name: "No owner" } });
+  await db.doc(`patients/${p("two")}`).set({ patient: { name: "Two homes" } });
+  await db.doc(`patients/${p("oth")}`).set({ patient: { name: "Guest tracker" }, ownerUid: guest.uid });
+  await db.doc(`users/own${tag}`).set({ patientId: p("own"), recent: { [p("own")]: { name: "anuj typed", pid: "AAA-AAA", at: 1 } } });
+  await db.doc(`users/hom${tag}`).set({ patientId: p("gst") });
+  await db.doc(`users/nur${tag}`).set({ patientId: p("non"), recent: { [p("own")]: { name: "anuj typed", at: 2 } } });
+  await db.doc(`users/aa${tag}`).set({ patientId: p("two") });
+  await db.doc(`users/bb${tag}`).set({ patientId: p("two") });
+
+  const { privateKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const key = JSON.stringify({
+    type: "service_account", project_id: PROJECT, client_email: `test@${PROJECT}.iam.gserviceaccount.com`,
+    private_key: privateKey.export({ type: "pkcs8", format: "pem" }),
+  });
+  const run = (dry) => execFileSync("node", ["rename-owners.js"], {
+    cwd: CLEANUP, encoding: "utf8", env: { ...process.env, FIREBASE_SERVICE_ACCOUNT: key, DRY_RUN: dry ? "1" : "0" },
+  });
+  const get = async (id) => (await db.doc(`patients/${p(id)}`).get()).data();
+  expect(run(true)).toContain("Would rename");
+  expect((await get("own")).patient.name).toBe("anuj typed"); // dry run changes nothing
+
+  run(false);
+  expect(await get("own")).toEqual({ patient: { name: "Anuj Mishra", pid: "AAA-AAA" }, ownerUid: `own${tag}` });
+  expect(await get("gst")).toEqual({ patient: { name: "Home Owner" }, ownerUid: `hom${tag}` }); // taken from the guest
+  expect(await get("non")).toEqual({ patient: { name: "Nurse Two" }, ownerUid: `nur${tag}` });
+  expect(await get("two")).toEqual({ patient: { name: "Two homes" } }); // ambiguous: left alone
+  expect(await get("oth")).toEqual({ patient: { name: "Guest tracker" }, ownerUid: guest.uid });
+  expect((await db.doc(`users/own${tag}`).get()).get("recent")).toEqual({ [p("own")]: { name: "Anuj Mishra", pid: "AAA-AAA", at: 1 } });
+  expect((await db.doc(`users/nur${tag}`).get()).get("recent")).toEqual({ [p("own")]: { name: "Anuj Mishra", at: 2 } });
+});
+
 // ---------- Medicines screen: folders and dragging ----------
 async function makeFolder(page, name, meds) {
   await page.locator("#folder-new").click();
