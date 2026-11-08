@@ -1,9 +1,8 @@
-// Puts each Google account's name on its tracker, for trackers the app can't fix by itself:
-// - the owner never opens the app again (the app only renames on the owner's own open, syncOwnerName)
-// - the tracker has no ownerUid, or was claimed by a guest or a deleted account, so the app
-//   never sees it as the Google user's (the rules don't let the app change ownerUid afterwards).
-//   Such a tracker goes to the Google account whose own tracker it is (users/{uid}.patientId),
-//   only when exactly one Google account has it as its own.
+// Puts each Google account's name on its own tracker (users/{uid}.patientId), and makes that
+// account its owner, for trackers the app can't fix by itself: the account never opens the app
+// again, or someone else claimed the tracker first (older app versions let the first Google
+// visitor, e.g. a nurse, claim it; the rules don't let the app change ownerUid afterwards).
+// A tracker that no Google account, or several, has as its own is left alone.
 // It also refreshes the names saved in each account's patient switcher (users/{uid}.recent).
 // Runs with the daily clean-up (.github/workflows/cleanup.yml). Only writes what differs, so
 // running it again changes nothing. Logs counts only, no names (Actions logs are public).
@@ -85,16 +84,12 @@ const names = new Map(); // patientId -> name after this run
 let renamed = 0, takenOver = 0, skipped = 0;
 for (const [id, snap] of patients) {
   const ownerUid = snap.get("ownerUid");
-  const owner = ownerUid ? accounts.get(ownerUid) : null;
-  let uid = null;
-  let takeOver = false;
-  if (isGoogle(owner)) uid = ownerUid;
-  else if (!owner || owner.providerData.length === 0) {
-    // No owner, a guest owner, or an owner whose account is gone
-    const homes = homeOf.get(id) ?? [];
-    if (homes.length === 1) [uid, takeOver] = [homes[0], true];
-    else if (homes.length > 1) skipped++; // several Google accounts call it their own: leave it
-  }
+  // Only the Google account whose own tracker it is names it. The recorded owner may just be the
+  // first Google account that visited it (older app versions), so it never counts on its own.
+  const homes = homeOf.get(id) ?? [];
+  if (homes.length > 1) skipped++; // several Google accounts call it their own: leave it
+  const uid = homes.length === 1 ? homes[0] : null;
+  const takeOver = uid !== null && ownerUid !== uid;
   const current = snap.get("patient")?.name;
   names.set(id, current);
   if (!uid) continue;
@@ -127,6 +122,6 @@ for (const d of users) {
 await writer?.close();
 
 console.log(`${dryRun ? "Would rename" : "Renamed"} ${renamed} tracker(s) to their Google name` +
-  ` (${takenOver} taken over from no owner, a guest or a deleted account).`);
+  ` (${takenOver} given to the account whose own tracker it is).`);
 console.log(`${dryRun ? "Would update" : "Updated"} the patient list of ${lists} account(s).`);
 if (skipped) console.log(`Left ${skipped} tracker(s) that several Google accounts call their own.`);

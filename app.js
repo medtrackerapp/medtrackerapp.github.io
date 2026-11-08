@@ -1076,6 +1076,7 @@ async function resolvePatient(u) {
     const data = { patientId: id };
     if (u.isAnonymous) data.expireAt = guestExpiry();
     setDoc(userRef, data, { merge: true }).catch(reportError);
+    userData.patientId = id;
   }
   return { id, draft: false };
 }
@@ -1125,6 +1126,7 @@ function saveDraft() {
   draft = false;
   const expireAt = guestExpiry();
   setDoc(doc(db, "users", user.uid), { patientId, expireAt }, { merge: true }).catch(reportError);
+  userData.patientId = patientId;
   setDoc(patientRef, { patient: { name: shared.patient.name }, ownerUid: user.uid, builtinTabs: false, expireAt },
     { merge: true }).catch(reportError);
   openPatient(patientId);
@@ -1201,7 +1203,14 @@ function migrateDoses() {
   batch.commit().catch(reportError);
 }
 
-// The first Google account to open a tracker takes it over, and its name replaces any name typed before.
+// The account's own tracker (users/{uid}.patientId) is the one that carries its name. A tracker
+// someone only visits (a nurse opening a patient's link or PID) is never claimed or renamed.
+function isOwnTracker() {
+  return patientId === userData.patientId;
+}
+
+// A brand-new tracker takes its maker's name. An existing unowned one is claimed only by the
+// Google account whose own tracker it is, and then carries its Google name.
 function claimPatient() {
   if (claimed) return; // once per open, so a failed write doesn't retry on every snapshot
   claimed = true;
@@ -1211,15 +1220,15 @@ function claimPatient() {
     data.builtinTabs = false;
     // Only a tracker a guest makes from scratch expires; an older one a guest happens to open never does.
     if (user.isAnonymous) data.expireAt = newGuestExpiry = guestExpiry();
-  }
+  } else if (user.isAnonymous || !isOwnTracker()) return;
   setDoc(patientRef, data, { merge: true }).catch(reportError);
 }
 
-// A Google account's own tracker always carries its Google name. Trackers claimed before (or
-// made with a typed name) kept that name, so the owner's every open puts the Google name back,
-// and a name changed in Google follows too. Guests keep the name they typed.
+// A Google account's own tracker always carries its Google name, whoever is recorded as its
+// owner (older versions let the first Google visitor claim it), and follows Google name changes.
+// Guests keep the name they typed.
 function syncOwnerName() {
-  if (claimed || user.isAnonymous || shared.ownerUid !== user.uid) return;
+  if (claimed || user.isAnonymous || !isOwnTracker()) return;
   claimed = true; // once per open, like claimPatient
   const name = googleName(user);
   if (shared.patient?.name === name) return;

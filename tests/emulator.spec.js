@@ -312,7 +312,7 @@ test("rename-owners puts each Google account's name on its tracker", async ({}, 
   });
   const r = await auth.importUsers([
     google(`own${tag}`, "Anuj Mishra"), google(`hom${tag}`, "Home Owner"), google(`nur${tag}`, "Nurse Two"),
-    google(`aa${tag}`, "Shared A"), google(`bb${tag}`, "Shared B"),
+    google(`aa${tag}`, "Shared A"), google(`bb${tag}`, "Shared B"), google(`pat${tag}`, "Real Patient"),
   ]);
   expect(r.failureCount).toBe(0);
   const guest = await auth.createUser({ uid: `gst${tag}` }); // no provider: a guest
@@ -323,6 +323,10 @@ test("rename-owners puts each Google account's name on its tracker", async ({}, 
   await db.doc(`patients/${p("non")}`).set({ patient: { name: "No owner" } });
   await db.doc(`patients/${p("two")}`).set({ patient: { name: "Two homes" } });
   await db.doc(`patients/${p("oth")}`).set({ patient: { name: "Guest tracker" }, ownerUid: guest.uid });
+  // Claimed by a nurse who opened it first (older app versions): the patient's own account wins
+  await db.doc(`patients/${p("vis")}`).set({ patient: { name: "Nurse Two" }, ownerUid: `nur${tag}` });
+  await db.doc(`patients/${p("vno")}`).set({ patient: { name: "Typed" }, ownerUid: `nur${tag}` });
+  await db.doc(`users/pat${tag}`).set({ patientId: p("vis") });
   await db.doc(`users/own${tag}`).set({ patientId: p("own"), recent: { [p("own")]: { name: "anuj typed", pid: "AAA-AAA", at: 1 } } });
   await db.doc(`users/hom${tag}`).set({ patientId: p("gst") });
   await db.doc(`users/nur${tag}`).set({ patientId: p("non"), recent: { [p("own")]: { name: "anuj typed", at: 2 } } });
@@ -347,6 +351,8 @@ test("rename-owners puts each Google account's name on its tracker", async ({}, 
   expect(await get("non")).toEqual({ patient: { name: "Nurse Two" }, ownerUid: `nur${tag}` });
   expect(await get("two")).toEqual({ patient: { name: "Two homes" } }); // ambiguous: left alone
   expect(await get("oth")).toEqual({ patient: { name: "Guest tracker" }, ownerUid: guest.uid });
+  expect(await get("vis")).toEqual({ patient: { name: "Real Patient" }, ownerUid: `pat${tag}` });
+  expect(await get("vno")).toEqual({ patient: { name: "Typed" }, ownerUid: `nur${tag}` }); // nobody's own: left alone
   expect((await db.doc(`users/own${tag}`).get()).get("recent")).toEqual({ [p("own")]: { name: "Anuj Mishra", pid: "AAA-AAA", at: 1 } });
   expect((await db.doc(`users/nur${tag}`).get()).get("recent")).toEqual({ [p("own")]: { name: "Anuj Mishra", at: 2 } });
 });
@@ -472,4 +478,17 @@ test("a Google account's own tracker shows the Google name, even an old one with
   await expect(page.locator("#patient-name")).toHaveText("Other Patient", { timeout: 20000 });
   await page.waitForTimeout(1000);
   expect((await admin().doc(`patients/${otherId}`).get()).get("patient.name")).toBe("Other Patient");
+
+  // A visitor never claims or renames an old unowned tracker, nor one it claimed in an older version
+  admin();
+  const req = createRequire(path.join(CLEANUP, "package.json"));
+  const { uid } = await req("firebase-admin/auth").getAuth(req("firebase-admin/app").getApps()[0]).getUserByEmail(email);
+  for (const [name, extra] of [["Old Unowned", {}], ["Claimed Earlier", { ownerUid: uid }]]) {
+    const vid = `v${crypto.randomBytes(10).toString("hex")}`;
+    await admin().doc(`patients/${vid}`).set({ patient: { name }, ...extra });
+    await page.goto(`/?emulator&patient=${vid}`);
+    await expect(page.locator("#patient-name")).toHaveText(name, { timeout: 20000 });
+    await page.waitForTimeout(1000);
+    expect((await admin().doc(`patients/${vid}`).get()).data()).toEqual({ patient: expect.objectContaining({ name }), ...extra });
+  }
 });
