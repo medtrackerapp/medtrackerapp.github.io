@@ -5,7 +5,8 @@
 // the app only sets it on trackers a guest made from scratch (claimPatient in app.js).
 //
 // Needs FIREBASE_SERVICE_ACCOUNT: the JSON key of a service account allowed to use Firestore.
-// DRY_RUN=1 only counts what would be deleted.
+// DRY_RUN=1 only checks whether anything would be deleted. No counts are logged: Actions logs are
+// public, and counts would show how many people use the app.
 import { initializeApp, cert } from "firebase-admin/app";
 import { getFirestore, Timestamp } from "firebase-admin/firestore";
 
@@ -51,7 +52,6 @@ for (const name of COLLECTIONS) {
     }
     if (page.size < 500) break;
   }
-  console.log(`${name}: ${count}`);
   total += count;
 }
-console.log(`${dryRun ? "Would delete" : "Deleted"} ${total} document(s).`);
+console.log(dryRun ? `Dry run: ${total ? "some" : "no"} expired guest data; nothing deleted.` : "Done.");

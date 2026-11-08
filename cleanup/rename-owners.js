@@ -5,7 +5,7 @@
 // A tracker that no Google account, or several, has as its own is left alone.
 // It also refreshes the names saved in each account's patient switcher (users/{uid}.recent).
 // Runs with the daily clean-up (.github/workflows/cleanup.yml). Only writes what differs, so
-// running it again changes nothing. Logs counts only, no names (Actions logs are public).
+// running it again changes nothing. Logs no names or counts (Actions logs are public).
 //
 // Needs FIREBASE_SERVICE_ACCOUNT like cleanup.js. DRY_RUN=1 only counts what would change.
 import { initializeApp, cert, getApps } from "firebase-admin/app";
@@ -121,7 +121,4 @@ for (const d of users) {
 }
 await writer?.close();
 
-console.log(`${dryRun ? "Would rename" : "Renamed"} ${renamed} tracker(s) to their Google name` +
-  ` (${takenOver} given to the account whose own tracker it is).`);
-console.log(`${dryRun ? "Would update" : "Updated"} the patient list of ${lists} account(s).`);
-if (skipped) console.log(`Left ${skipped} tracker(s) that several Google accounts call their own.`);
+console.log(dryRun ? `Dry run: ${renamed || takenOver || lists ? "some" : "no"} names would change.` : "Done.");

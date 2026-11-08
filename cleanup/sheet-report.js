@@ -75,7 +75,7 @@ async function api(path, method = "GET", body) {
     const status = err.response?.status;
     const message = err.response?.data?.error?.message ?? err.message;
     if (status === 403) {
-      console.error(`The Sheet refused access: ${message}\nShare the Sheet as Editor with ${credentials.client_email}, ` +
+      console.error(`The Sheet refused access: ${message}\nShare the Sheet as Editor with the service account (client_email in its key), ` +
         `and turn on the Google Sheets API: https://console.cloud.google.com/apis/library/sheets.googleapis.com?project=${project}`);
     } else if (status === 404) console.error(`No Sheet with that SHEET_ID (${message}).`);
     else console.error(message);
@@ -297,7 +297,8 @@ if (total < Object.keys(trackers).length) {
   const expired = Object.keys(trackers).filter((id) => trackers[id].x !== null && trackers[id].x <= now);
   for (const snap of await getDocs(expired.map((id) => db.doc(`patients/${id}`)))) if (!snap.exists) delete trackers[snap.id];
 }
-const newState = { v: VERSION, lastRun: now, fullAt: full ? now : state.fullAt, sweepDay: today,
+// reads: kept here rather than in the log, which anyone can see
+const newState = { v: VERSION, lastRun: now, reads, fullAt: full ? now : state.fullAt, sweepDay: today,
   needFull: total !== Object.keys(trackers).length, users, trackers };
 
 // ---------- Cells ----------
@@ -448,5 +449,5 @@ if (missing.length) {
 
 // Last, so a run that fails before this is simply redone from the previous state
 await replaceTab(TABS.state, toRows(newState), "RAW");
-console.log(`Sheet updated (${full ? "read everything" : "changes only"}): ${people.length} Google account(s), ` +
-  `${guestTrackers.length} guest tracker(s), ${missing.length} new day(s), about ${reads} Firestore read(s).`);
+// No counts: Actions logs are public, and they would show how many people use the app
+console.log(`Sheet updated (${full ? "read everything" : "changes only"}).`);

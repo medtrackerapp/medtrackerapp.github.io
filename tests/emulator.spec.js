@@ -34,6 +34,20 @@ function today() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+// The emulators answer their first requests slowly (Java warming up), which made whichever test
+// ran first miss its 20 s waits. One throwaway guest sign-in warms them up first.
+test.beforeAll(async ({ browser }) => {
+  test.setTimeout(90000);
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await page.goto("/?emulator");
+  await page.getByRole("button", { name: "Just looking? Continue as guest" }).click();
+  await page.locator("#name-input").fill("Warm Up");
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.locator("#patient-name")).toHaveText("Warm Up", { timeout: 60000 });
+  await context.close();
+});
+
 // Collect script errors for every page a test opens
 let problems;
 test.beforeEach(() => { problems = []; });
@@ -287,7 +301,7 @@ test("the clean-up deletes only expired guest data, with its daily records", asy
   const run = (dry) => execFileSync("node", ["cleanup.js"], {
     cwd: CLEANUP, encoding: "utf8", env: { ...process.env, FIREBASE_SERVICE_ACCOUNT: key, DRY_RUN: dry ? "1" : "0" },
   });
-  expect(run(true)).toContain("Would delete");
+  expect(run(true)).toContain("Dry run: some expired guest data");
   expect((await db.doc(`patients/old${tag}0000000`).get()).exists).toBe(true); // dry run deletes nothing
   run(false);
   expect((await db.doc(`patients/old${tag}0000000`).get()).exists).toBe(false);
@@ -311,7 +325,7 @@ test("rename-owners puts each Google account's name on its tracker", async ({}, 
     providerData: [{ uid: `g${uid}`, providerId: "google.com", displayName, email: `${uid}@example.com` }],
   });
   const r = await auth.importUsers([
-    google(`own${tag}`, "Anuj Mishra"), google(`hom${tag}`, "Home Owner"), google(`nur${tag}`, "Nurse Two"),
+    google(`own${tag}`, "Asha Verma"), google(`hom${tag}`, "Home Owner"), google(`nur${tag}`, "Nurse Two"),
     google(`aa${tag}`, "Shared A"), google(`bb${tag}`, "Shared B"), google(`pat${tag}`, "Real Patient"),
   ]);
   expect(r.failureCount).toBe(0);
@@ -342,19 +356,19 @@ test("rename-owners puts each Google account's name on its tracker", async ({}, 
     cwd: CLEANUP, encoding: "utf8", env: { ...process.env, FIREBASE_SERVICE_ACCOUNT: key, DRY_RUN: dry ? "1" : "0" },
   });
   const get = async (id) => (await db.doc(`patients/${p(id)}`).get()).data();
-  expect(run(true)).toContain("Would rename");
+  expect(run(true)).toContain("Dry run: some names would change");
   expect((await get("own")).patient.name).toBe("anuj typed"); // dry run changes nothing
 
   run(false);
-  expect(await get("own")).toEqual({ patient: { name: "Anuj Mishra", pid: "AAA-AAA" }, ownerUid: `own${tag}` });
+  expect(await get("own")).toEqual({ patient: { name: "Asha Verma", pid: "AAA-AAA" }, ownerUid: `own${tag}` });
   expect(await get("gst")).toEqual({ patient: { name: "Home Owner" }, ownerUid: `hom${tag}` }); // taken from the guest
   expect(await get("non")).toEqual({ patient: { name: "Nurse Two" }, ownerUid: `nur${tag}` });
   expect(await get("two")).toEqual({ patient: { name: "Two homes" } }); // ambiguous: left alone
   expect(await get("oth")).toEqual({ patient: { name: "Guest tracker" }, ownerUid: guest.uid });
   expect(await get("vis")).toEqual({ patient: { name: "Real Patient" }, ownerUid: `pat${tag}` });
   expect(await get("vno")).toEqual({ patient: { name: "Typed" }, ownerUid: `nur${tag}` }); // nobody's own: left alone
-  expect((await db.doc(`users/own${tag}`).get()).get("recent")).toEqual({ [p("own")]: { name: "Anuj Mishra", pid: "AAA-AAA", at: 1 } });
-  expect((await db.doc(`users/nur${tag}`).get()).get("recent")).toEqual({ [p("own")]: { name: "Anuj Mishra", at: 2 } });
+  expect((await db.doc(`users/own${tag}`).get()).get("recent")).toEqual({ [p("own")]: { name: "Asha Verma", pid: "AAA-AAA", at: 1 } });
+  expect((await db.doc(`users/nur${tag}`).get()).get("recent")).toEqual({ [p("own")]: { name: "Asha Verma", at: 2 } });
 });
 
 // ---------- Table of Google accounts (cleanup/list-users.js) ----------
@@ -566,6 +580,8 @@ test("a Google account's own tracker shows the Google name, even an old one with
   const id = new URL(page.url()).searchParams.get("patient");
 
   // An older tracker: owned by this account, but still named what was typed back then
+  // (the page shows the name before its save reaches the server, so wait for the save first)
+  await expect.poll(async () => (await admin().doc(`patients/${id}`).get()).exists, { timeout: 20000 }).toBe(true);
   await admin().doc(`patients/${id}`).update({ "patient.name": "Typed Name" });
   await expect(page.locator("#patient-name")).toHaveText("Typed Name");
   await page.reload();
