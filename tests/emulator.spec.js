@@ -29,6 +29,11 @@ function hhmm(date) {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
+// The Sheet script counts doses by India date (like the app's users' phones), whatever this machine's time zone
+function indiaToday() {
+  return new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+}
+
 function today() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -417,7 +422,7 @@ test("sheet-report builds the tables, then re-reads only what was used since", a
   await db.doc(`users/${g}`).set({ patientId: `${g}00000000`, recent: { a: {}, b: {} } });
   await db.doc(`patients/${g}00000000`).set({ patient: { name: "Sheet Tracker", pid: "+HT-123" }, ownerUid: g,
     builtinTabs: false, medicines: { m1: { name: "Dolo" } } });
-  await db.doc(`patients/${g}00000000/days/${today()}`).set({ m1_0: { by: "Sheet Person", uid: g, at: Timestamp.now() } });
+  await db.doc(`patients/${g}00000000/days/${indiaToday()}`).set({ m1_0: { by: "Sheet Person", uid: g, at: Timestamp.now() } });
   await db.doc(`patients/${q}00000000`).set({ patient: { name: "Guest Tracker", pid: "GST-123" }, ownerUid: q,
     builtinTabs: false, expireAt: Timestamp.fromMillis(Date.now() + 5 * 86400000) });
   await db.doc(`patients/${q}00000000/days/2020-01-05`).set({ m1_0: true }); // long before this week
@@ -469,7 +474,7 @@ test("sheet-report builds the tables, then re-reads only what was used since", a
   expect(guestIn(quiet)).toEqual(guest);
 
   // The account used it since: its tracker is read again, with today's new dose
-  await db.doc(`patients/${g}00000000/days/${today()}`).update({ m1_1: { by: "Sheet Person", uid: g, at: Timestamp.now() } });
+  await db.doc(`patients/${g}00000000/days/${indiaToday()}`).update({ m1_1: { by: "Sheet Person", uid: g, at: Timestamp.now() } });
   await db.doc(`patients/${q}00000001`).set({ patient: { name: "New Guest", pid: "NEW-123" }, ownerUid: q,
     builtinTabs: false, expireAt: Timestamp.fromMillis(Date.now() + 30 * 86400000) });
   lastRunAt(Date.now() - 10 * 60000);
@@ -564,7 +569,12 @@ test("deleting a folder can be undone; its medicines stay", async ({ page }) => 
 async function signInGoogle(page, displayName, email) {
   await page.goto("/?emulator");
   const [popup] = await Promise.all([page.waitForEvent("popup"), page.locator("#login-btn").click()]);
-  await popup.getByText("Add new account").click();
+  await popup.waitForLoadState();
+  // A click before the window's script is ready does nothing, so click until the form opens
+  await expect(async () => {
+    await popup.getByText("Add new account").click();
+    await expect(popup.locator("#display-name-input")).toBeVisible({ timeout: 2000 });
+  }).toPass({ timeout: 20000 });
   await popup.locator("#display-name-input").fill(displayName);
   await popup.locator("#email-input").fill(email);
   await popup.getByRole("button", { name: /Sign in with Google/ }).click();
