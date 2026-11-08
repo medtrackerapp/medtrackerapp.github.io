@@ -429,6 +429,12 @@ test("sheet-report builds the People, Daily summary and Guest trackers tables", 
   expect(todayRow[0]).toMatch(/^\d{4}-\d{2}-\d{2}$/); // India date, may differ from this machine's
   expect(todayRow[1]).toBeGreaterThanOrEqual(1);
   expect(out.daily.slice(1).slice(-2).reduce((n, r) => n + r[7], 0)).toBeGreaterThanOrEqual(1);
+
+  // Hourly runs read only recent doses (plus each tracker's latest day): same numbers here
+  await db.doc(`patients/${q}00000000/days/2020-01-05`).set({ m1_0: true });
+  const recent = JSON.parse(execFileSync("node", ["sheet-report.js", keyFile, "--json", "--recent"], { cwd: CLEANUP, encoding: "utf8" }));
+  expect(recent.people.find((r) => r[1] === `'${g}@example.com`).slice(4, 10)).toEqual([0, "'Sheet Tracker", "'+HT-123", 1, 1, 2]);
+  expect(recent.guests.find((r) => r[2] === "'GST-123").slice(4, 7)).toEqual(["2020-01-05", 0, 0]); // older than the window, still found
 });
 
 // ---------- Medicines screen: folders and dragging ----------

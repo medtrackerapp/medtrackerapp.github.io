@@ -8,7 +8,8 @@
 // Needs FIREBASE_SERVICE_ACCOUNT (as cleanup.js; or a key file as the first argument) and
 // SHEET_ID (the long id in the Sheet's link), the Sheet shared as Editor with the service
 // account's email, and the Google Sheets API turned on for the project.
-// --json prints the tables instead of writing them (tests, checking).
+// --json prints the tables instead of writing them (tests, checking); --recent with it reads
+// only the last days of doses, as hourly runs do.
 import { readFileSync } from "node:fs";
 import { initializeApp, cert, getApps } from "firebase-admin/app";
 import { getFirestore, FieldPath } from "firebase-admin/firestore";
@@ -47,6 +48,55 @@ const now = Date.now();
 const today = dateOf(now);
 const weekStart = addDays(today, -6);
 
+// ---------- The Sheet ----------
+const client = new JWT({ email: credentials.client_email, key: credentials.private_key,
+  scopes: ["https://www.googleapis.com/auth/spreadsheets"] });
+const API = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}`;
+async function api(path, method = "GET", body) {
+  const res = await client.request({ url: API + path, method, data: body }).catch((err) => {
+    const status = err.response?.status;
+    const message = err.response?.data?.error?.message ?? err.message;
+    if (status === 403) {
+      console.error(`The Sheet refused access: ${message}\nShare the Sheet as Editor with ${credentials.client_email}, ` +
+        `and turn on the Google Sheets API: https://console.cloud.google.com/apis/library/sheets.googleapis.com?project=${project}`);
+    } else if (status === 404) console.error(`No Sheet with that SHEET_ID (${message}).`);
+    else console.error(message);
+    process.exit(1);
+  });
+  return res.data;
+}
+
+const TABS = { people: "People", daily: "Daily summary", guests: "Guest trackers" };
+const RED = { red: 0.98, green: 0.82, blue: 0.82 };
+// Light red when a column's cell matches, from row 2 down
+const redWhen = (sheetId, col, formula) => ({
+  addConditionalFormatRule: { index: 0, rule: {
+    ranges: [{ sheetId, startRowIndex: 1, startColumnIndex: col, endColumnIndex: col + 1 }],
+    booleanRule: { condition: { type: "CUSTOM_FORMULA", values: [{ userEnteredValue: formula }] }, format: { backgroundColor: RED } },
+  } },
+});
+const col = (n) => String.fromCharCode(65 + n);
+const ruleFor = {
+  people: (id) => [redWhen(id, 4, `=AND(ISNUMBER(${col(4)}2),${col(4)}2>14)`), redWhen(id, 7, `=AND(ISNUMBER(${col(7)}2),${col(7)}2=0)`), redWhen(id, 8, `=AND(ISNUMBER(${col(8)}2),${col(8)}2=0)`)],
+  daily: () => [],
+  guests: (id) => [redWhen(id, 8, `=AND(ISNUMBER(${col(8)}2),${col(8)}2<=7)`), redWhen(id, 5, `=AND(ISNUMBER(${col(5)}2),${col(5)}2=0)`), redWhen(id, 6, `=AND(ISNUMBER(${col(6)}2),${col(6)}2=0)`)],
+};
+
+const range = (title, a1) => encodeURIComponent(`'${title}'!${a1}`);
+let sheets = [];
+let existing = []; // Daily summary's Date column as written so far
+if (!json) {
+  sheets = (await api("?fields=sheets.properties")).sheets.map((s) => s.properties);
+  if (sheets.some((s) => s.title === TABS.daily)) {
+    // Dates come back as day numbers (days since 1899-12-30), whatever the Sheet's locale
+    existing = (await api(`/values/${range(TABS.daily, "A:A")}?valueRenderOption=UNFORMATTED_VALUE`)).values ?? [];
+  }
+}
+// The whole dose history is read only to fill an empty Daily summary; after that each run reads
+// the last days only, so the hourly runs stay far inside Firestore's free 50,000 reads a day.
+const full = json ? !args.includes("--recent") : existing.length < 2;
+const windowStart = addDays(today, -8);
+
 // ---------- Read everything ----------
 const accounts = [];
 let pageToken;
@@ -79,7 +129,28 @@ const ticksOn = new Map(); // date -> count, all trackers
 const tracker = new Map(); // patientId -> { week, last }
 const lastTickBy = new Map(); // uid -> ms of their latest tick
 const tickersOn = new Map(); // date -> Set of uids who ticked
-for (const d of await allDocs(db.collectionGroup("days").orderBy(FieldPath.documentId()))) {
+// Made by a guest: it expires, or its owner is a guest login
+function isGuestTracker(p) {
+  const owner = byUid.get(p.ownerUid);
+  return Boolean(p.expireAt || (owner && owner.providerData.length === 0));
+}
+let dayDocs;
+if (full) dayDocs = await allDocs(db.collectionGroup("days").orderBy(FieldPath.documentId()));
+else {
+  // Per tracker: the window's days. A guest tracker with none reads all its days (30 at most)
+  // for "Last dose given" (Firestore can't fetch just the newest by id).
+  dayDocs = [];
+  const ids = [...patients.keys()];
+  for (let i = 0; i < ids.length; i += 20) {
+    await Promise.all(ids.slice(i, i + 20).map(async (id) => {
+      const days = db.collection(`patients/${id}/days`);
+      const recent = await days.where(FieldPath.documentId(), ">=", windowStart).get();
+      dayDocs.push(...recent.docs);
+      if (recent.empty && isGuestTracker(patients.get(id))) dayDocs.push(...(await days.get()).docs);
+    }));
+  }
+}
+for (const d of dayDocs) {
   const patientId = d.ref.parent.parent.id;
   const date = d.id;
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;
@@ -131,10 +202,7 @@ const people = google.map((u) => {
 const guestHead = ["Guest name", "Tracker name", "PID", "Created", "Last dose given", "Medicines",
   "Doses given (7 days)", "Deletes on", "Days left", "Guest User ID", "Tracker ID"];
 const GUEST_DAYS = 30;
-const guestTrackers = [...patients].filter(([, p]) => {
-  const owner = byUid.get(p.ownerUid);
-  return p.expireAt || (owner && owner.providerData.length === 0);
-}).map(([id, p]) => {
+const guestTrackers = [...patients].filter(([, p]) => isGuestTracker(p)).map(([id, p]) => {
   const expire = p.expireAt?.toMillis?.();
   const t = tracker.get(id);
   return {
@@ -180,44 +248,10 @@ if (json) {
   process.exit(0);
 }
 
-// ---------- Write to the Sheet ----------
-const client = new JWT({ email: credentials.client_email, key: credentials.private_key,
-  scopes: ["https://www.googleapis.com/auth/spreadsheets"] });
-const API = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}`;
-async function api(path, method = "GET", body) {
-  const res = await client.request({ url: API + path, method, data: body }).catch((err) => {
-    const status = err.response?.status;
-    const message = err.response?.data?.error?.message ?? err.message;
-    if (status === 403) {
-      console.error(`The Sheet refused access: ${message}\nShare the Sheet as Editor with ${credentials.client_email}, ` +
-        `and turn on the Google Sheets API: https://console.cloud.google.com/apis/library/sheets.googleapis.com?project=${project}`);
-    } else if (status === 404) console.error(`No Sheet with that SHEET_ID (${message}).`);
-    else console.error(message);
-    process.exit(1);
-  });
-  return res.data;
-}
-
-const TABS = { people: "People", daily: "Daily summary", guests: "Guest trackers" };
-const RED = { red: 0.98, green: 0.82, blue: 0.82 };
-// Light red when a column's cell matches, from row 2 down
-const redWhen = (sheetId, col, formula) => ({
-  addConditionalFormatRule: { index: 0, rule: {
-    ranges: [{ sheetId, startRowIndex: 1, startColumnIndex: col, endColumnIndex: col + 1 }],
-    booleanRule: { condition: { type: "CUSTOM_FORMULA", values: [{ userEnteredValue: formula }] }, format: { backgroundColor: RED } },
-  } },
-});
-const col = (n) => String.fromCharCode(65 + n);
-const ruleFor = {
-  people: (id) => [redWhen(id, 4, `=AND(ISNUMBER(${col(4)}2),${col(4)}2>14)`), redWhen(id, 7, `=${col(7)}2=0`), redWhen(id, 8, `=${col(8)}2=0`)],
-  daily: () => [],
-  guests: (id) => [redWhen(id, 8, `=AND(ISNUMBER(${col(8)}2),${col(8)}2<=7)`), redWhen(id, 5, `=${col(5)}2=0`), redWhen(id, 6, `=${col(6)}2=0`)],
-};
 const widthOf = { people: peopleHead.length, daily: dailyHead.length, guests: guestHead.length };
 
 // New tabs get their header style, frozen row, filter and colours once; later runs leave
 // any formatting you change alone
-let sheets = (await api("?fields=sheets.properties")).sheets.map((s) => s.properties);
 const fresh = new Set();
 for (const [key, title] of Object.entries(TABS)) {
   if (sheets.some((s) => s.title === title)) continue;
@@ -240,7 +274,6 @@ if (blank && fresh.size && sheets.length > 3) {
   if (!values?.length) await api(":batchUpdate", "POST", { requests: [{ deleteSheet: { sheetId: blank.sheetId } }] });
 }
 
-const range = (title, a1) => encodeURIComponent(`'${title}'!${a1}`);
 async function replaceTab(title, rows) {
   await api(`/values/${range(title, "A:Z")}:clear`, "POST", {});
   await api(`/values/${range(title, "A1")}?valueInputOption=USER_ENTERED`, "PUT", { values: rows });
@@ -250,8 +283,6 @@ await replaceTab(TABS.guests, [guestHead, ...guestTrackers]);
 
 // Daily summary: keep rows already written (their live numbers can't be rebuilt), add missing
 // days, and refresh yesterday and today
-// Dates come back as day numbers (days since 1899-12-30), whatever the Sheet's locale
-const existing = (await api(`/values/${range(TABS.daily, "A:A")}?valueRenderOption=UNFORMATTED_VALUE`)).values ?? [];
 const isoOf = (v) => (typeof v === "number" ? new Date(Date.UTC(1899, 11, 30) + Math.round(v) * DAY).toISOString().slice(0, 10) : String(v ?? ""));
 const rowOf = new Map(existing.slice(1).map((r, i) => [isoOf(r[0]), i + 2]));
 const data = [{ range: `'${TABS.daily}'!A1`, values: [dailyHead] }];
@@ -259,6 +290,7 @@ const missing = [];
 for (let d = firstDay; d <= today; d = addDays(d, 1)) {
   const row = rowOf.get(d);
   if (row && d < addDays(today, -1)) continue;
+  if (!full && d < windowStart) continue; // older ticks weren't read: don't add a day with 0 doses
   const values = dailyRow(d, d === today);
   // Yesterday's row was written live last night; keep what can't be rebuilt (null = leave the cell)
   if (row && d !== today) values[3] = values[5] = values[6] = null;
