@@ -1,10 +1,10 @@
 name: Update the users Google Sheet
 
-# At 8 am, 12 pm, 4 pm and 8 pm India time, rewrite the People and Guest trackers tabs and
-# refresh the Daily summary (see cleanup/sheet-report.js). Free on a public repo.
+# Refresh the Sheet 20 minutes before 8 am, 12 pm, 4 pm and 8 pm India time, so it's current
+# by then (see cleanup/sheet-report.js). Free on a public repo.
 on:
   schedule:
-    - cron: "30 2,6,10,14 * * *" # UTC
+    - cron: "10 2,6,10,14 * * *" # 7:40, 11:40, 15:40, 19:40 IST
   workflow_dispatch:
 
 permissions:

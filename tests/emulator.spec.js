@@ -387,8 +387,9 @@ test("list-users tabulates Google accounts with their own tracker", async ({}, t
 });
 
 // ---------- Google Sheet report (cleanup/sheet-report.js --json) ----------
-test("sheet-report builds the People, Daily summary and Guest trackers tables", async ({}, testInfo) => {
+test("sheet-report builds the tables, then re-reads only what was used since", async ({}, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "data check, once is enough");
+  const fs = require("fs");
   const db = admin();
   const req = createRequire(path.join(CLEANUP, "package.json"));
   const auth = req("firebase-admin/auth").getAuth(req("firebase-admin/app").getApps()[0]);
@@ -396,6 +397,7 @@ test("sheet-report builds the People, Daily summary and Guest trackers tables", 
   const tag = crypto.randomBytes(6).toString("hex");
   const g = `shg${tag}`, q = `shq${tag}`;
   await auth.importUsers([{ uid: g, displayName: "=Sheet Person", email: `${g}@example.com`,
+    metadata: { creationTime: new Date().toUTCString(), lastSignInTime: new Date().toUTCString() },
     providerData: [{ uid: `x${g}`, providerId: "google.com", email: `${g}@example.com` }] }]);
   await auth.createUser({ uid: q, displayName: "Guesty" });
   await db.doc(`users/${g}`).set({ patientId: `${g}00000000`, recent: { a: {}, b: {} } });
@@ -404,37 +406,64 @@ test("sheet-report builds the People, Daily summary and Guest trackers tables", 
   await db.doc(`patients/${g}00000000/days/${today()}`).set({ m1_0: { by: "Sheet Person", uid: g, at: Timestamp.now() } });
   await db.doc(`patients/${q}00000000`).set({ patient: { name: "Guest Tracker", pid: "GST-123" }, ownerUid: q,
     builtinTabs: false, expireAt: Timestamp.fromMillis(Date.now() + 5 * 86400000) });
+  await db.doc(`patients/${q}00000000/days/2020-01-05`).set({ m1_0: true }); // long before this week
 
   const { privateKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
   const keyFile = testInfo.outputPath("key.json");
-  require("fs").writeFileSync(keyFile, JSON.stringify({
+  fs.writeFileSync(keyFile, JSON.stringify({
     type: "service_account", project_id: PROJECT, client_email: `test@${PROJECT}.iam.gserviceaccount.com`,
     private_key: privateKey.export({ type: "pkcs8", format: "pem" }),
   }));
-  const out = JSON.parse(execFileSync("node", ["sheet-report.js", keyFile, "--json"], { cwd: CLEANUP, encoding: "utf8" }));
+  const stateFile = testInfo.outputPath("state.json");
+  const run = () => JSON.parse(execFileSync("node", ["sheet-report.js", keyFile, "--json", "--state", stateFile], { cwd: CLEANUP, encoding: "utf8" }));
+  // Moves the last run's time (the tests run alongside others, so a full read is never asked for)
+  const lastRunAt = (ms) => {
+    const rows = JSON.parse(fs.readFileSync(stateFile, "utf8"));
+    const meta = JSON.parse(rows[0][1]);
+    Object.assign(meta, { lastRun: ms, fullAt: Date.now(), needFull: false });
+    rows[0][1] = JSON.stringify(meta);
+    fs.writeFileSync(stateFile, JSON.stringify(rows));
+  };
+  const personIn = (out) => out.people.find((r) => r[1] === `'${g}@example.com`);
+  const guestIn = (out) => out.guests.find((r) => r[2] === "'GST-123");
 
-  const person = out.people.find((r) => r[1] === `'${g}@example.com`);
+  // First run: reads everything
+  const out = run();
+  expect(out.mode).toBe("full");
+  const person = personIn(out);
   expect(person.slice(0, 2)).toEqual(["'=Sheet Person", `'${g}@example.com`]); // typed text never runs as a formula
   expect(person.slice(4, 10)).toEqual([0, "'Sheet Tracker", "'+HT-123", 1, 1, 2]);
   expect(person[10]).toBe(`=HYPERLINK("https://console.firebase.google.com/project/${PROJECT}/firestore/databases/-default-/data/~2Fusers~2F${g}","${g}")`);
   expect(person[11]).toContain(`~2Fpatients~2F${g}00000000`);
-
-  const guest = out.guests.find((r) => r[2] === "'GST-123");
+  const guest = guestIn(out);
   expect(guest[0]).toBe("'Guesty");
-  expect(guest.slice(4, 9)).toEqual(["—", 0, 0, expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), 5]);
+  expect(guest.slice(4, 9)).toEqual(["2020-01-05", 0, 0, expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/), 5]); // last dose found
   expect(out.guests.some((r) => r[2] === "'+HT-123")).toBe(false); // Google trackers aren't guests
-
   const todayRow = out.daily[out.daily.length - 1];
   expect(out.daily[0][0]).toBe("Date");
   expect(todayRow[0]).toMatch(/^\d{4}-\d{2}-\d{2}$/); // India date, may differ from this machine's
   expect(todayRow[1]).toBeGreaterThanOrEqual(1);
   expect(out.daily.slice(1).slice(-2).reduce((n, r) => n + r[7], 0)).toBeGreaterThanOrEqual(1);
 
-  // Hourly runs read only recent doses (plus each tracker's latest day): same numbers here
-  await db.doc(`patients/${q}00000000/days/2020-01-05`).set({ m1_0: true });
-  const recent = JSON.parse(execFileSync("node", ["sheet-report.js", keyFile, "--json", "--recent"], { cwd: CLEANUP, encoding: "utf8" }));
-  expect(recent.people.find((r) => r[1] === `'${g}@example.com`).slice(4, 10)).toEqual([0, "'Sheet Tracker", "'+HT-123", 1, 1, 2]);
-  expect(recent.guests.find((r) => r[2] === "'GST-123").slice(4, 7)).toEqual(["2020-01-05", 0, 0]); // older than the window, still found
+  // Nobody used the app since the last run: (almost) nothing is read, and the tables stay the same
+  await db.doc(`patients/${g}00000000`).update({ "patient.name": "Renamed Meanwhile" });
+  lastRunAt(Date.now() + 2 * 3600000);
+  const quiet = run();
+  expect(quiet.mode).toBe("update");
+  expect(quiet.reads).toBeLessThan(out.reads);
+  expect(personIn(quiet)).toEqual(person);
+  expect(guestIn(quiet)).toEqual(guest);
+
+  // The account used it since: its tracker is read again, with today's new dose
+  await db.doc(`patients/${g}00000000/days/${today()}`).update({ m1_1: { by: "Sheet Person", uid: g, at: Timestamp.now() } });
+  await db.doc(`patients/${q}00000001`).set({ patient: { name: "New Guest", pid: "NEW-123" }, ownerUid: q,
+    builtinTabs: false, expireAt: Timestamp.fromMillis(Date.now() + 30 * 86400000) });
+  lastRunAt(Date.now() - 10 * 60000);
+  const used = run();
+  expect(used.mode).toBe("update");
+  expect(personIn(used).slice(5, 9)).toEqual(["'Renamed Meanwhile", "'+HT-123", 1, 2]);
+  expect(used.guests.find((r) => r[2] === "'NEW-123")?.[1]).toBe("'New Guest"); // a guest's new tracker shows up
+  expect(guestIn(used).slice(4, 7)).toEqual(["2020-01-05", 0, 0]); // kept from before
 });
 
 // ---------- Medicines screen: folders and dragging ----------
