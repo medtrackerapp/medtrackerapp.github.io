@@ -6,9 +6,11 @@
   "scripts": {
     "cleanup": "node cleanup.js",
     "rename-owners": "node rename-owners.js",
-    "users": "node list-users.js"
+    "users": "node list-users.js",
+    "sheet": "node sheet-report.js"
   },
   "dependencies": {
-    "firebase-admin": "13.4.0"
+    "firebase-admin": "13.4.0",
+    "google-auth-library": "9.15.1"
   }
 }
