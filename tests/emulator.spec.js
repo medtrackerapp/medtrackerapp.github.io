@@ -146,9 +146,10 @@ test("ticking a dose records who gave it, and other phones see it", async ({ pag
 
   // Stored in a small per-day doc, not on the patient doc
   const id = new URL(page.url()).searchParams.get("patient");
-  const day = await admin().doc(`patients/${id}/days/${today()}`).get();
-  const [entry] = Object.values(day.data());
+  const day = (await admin().doc(`patients/${id}/days/${today()}`).get()).data();
+  const [entry] = Object.entries(day).filter(([key]) => key.includes("_")).map(([, tick]) => tick);
   expect(entry.by).toBe("Nurse Asha");
+  expect(day.changedAt.toMillis()).toBeGreaterThan(Date.now() - 120000); // the server's time of the change
   expect((await admin().doc(`patients/${id}`).get()).get("doses")).toBeUndefined();
 });
 
@@ -211,31 +212,72 @@ test("the last 7 days show each dose, today included", async ({ page }) => {
   await expect(page.locator("#toast-text")).toContainText("1st: History Nurse");
 });
 
-// Past days are read once per phone, then come from its own copy; only today is followed live
-test("finished days are read once, then come from the phone's own copy", async ({ page }, testInfo) => {
+// Past days come from the phone's own copy; one query asks which days changed (stamped by the
+// server) and only those are read again. Only today is followed live.
+test("finished days come from the phone's own copy, and changed ones are read again", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "desktop", "data check, once is enough");
   watch(page);
-  const { Timestamp } = createRequire(path.join(CLEANUP, "package.json"))("firebase-admin/firestore");
+  await page.clock.install(); // the real time; moved on below to stand for half an hour away
+  const { Timestamp, FieldValue } = createRequire(path.join(CLEANUP, "package.json"))("firebase-admin/firestore");
   const id = `cache${crypto.randomBytes(8).toString("hex")}`;
+  const tick = (by) => ({ by, uid: "x", at: Timestamp.now() });
   await admin().doc(`patients/${id}`).set({
     patient: { name: "Cache Tracker", pid: "CAC-HE1" }, ownerUid: "someone", builtinTabs: false,
-    medicines: { m1: { name: "Aspirin", everyDays: 1, dosesPerDay: 1, startDate: dayOffset(-3), createdAt: Date.now() - 3 * 86400000 } },
+    medicines: { m1: { name: "Aspirin", everyDays: 1, dosesPerDay: 2, startDate: dayOffset(-3), createdAt: Date.now() - 3 * 86400000 } },
   });
-  await admin().doc(`patients/${id}/days/${dayOffset(-1)}`).set({ m1_0: { by: "Night Nurse", uid: "x", at: Timestamp.now() } });
+  const yesterdayRef = admin().doc(`patients/${id}/days/${dayOffset(-1)}`);
+  await yesterdayRef.set({ m1_0: tick("Night Nurse") }); // written before change stamps existed
   await signInGuest(page, null, `/?emulator&patient=${id}`);
   const yesterday = page.locator("#history .history-day").nth(5);
-  await expect(yesterday).toHaveAttribute("aria-label", /1 of 1 given$/, { timeout: 20000 });
+  await expect(yesterday).toHaveAttribute("aria-label", /1 of 2 given$/, { timeout: 20000 });
 
-  // Changed on the server afterwards: this phone doesn't read that day again
-  await admin().doc(`patients/${id}/days/${dayOffset(-1)}`).delete();
+  // Changed without a stamp (as a phone still on an older version would): not read again
+  await yesterdayRef.delete();
   await page.reload();
   await expect(page.locator("#patient-name")).toHaveText("Cache Tracker", { timeout: 20000 });
-  await expect(yesterday).toHaveAttribute("aria-label", /1 of 1 given$/);
-  // Today is still live
+  await expect(yesterday).toHaveAttribute("aria-label", /1 of 2 given$/);
+
+  // A dose that synced late, stamped with the server's time: the next open reads that day again
+  await yesterdayRef.set({ m1_0: tick("Night Nurse"), m1_1: tick("Late Nurse"), changedAt: FieldValue.serverTimestamp() });
+  await page.reload();
+  await expect(yesterday).toHaveAttribute("aria-label", /2 of 2 given$/, { timeout: 20000 });
+
+  // Left open: it asks again when it comes back on screen after half an hour, not sooner
+  await yesterdayRef.update({ m1_1: FieldValue.delete(), changedAt: FieldValue.serverTimestamp() });
+  const comeBack = () => page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+  await comeBack();
+  await page.waitForTimeout(1500);
+  await expect(yesterday).toHaveAttribute("aria-label", /2 of 2 given$/);
+  await page.clock.setSystemTime(Date.now() + 31 * 60000);
+  await comeBack();
+  await expect(yesterday).toHaveAttribute("aria-label", /1 of 2 given$/, { timeout: 20000 });
+
+  // Today is followed live
   const todayCol = page.locator("#history .history-day.today");
-  await expect(todayCol).toHaveAttribute("aria-label", /0 of 1 given$/);
-  await admin().doc(`patients/${id}/days/${today()}`).set({ m1_0: { by: "Day Nurse", uid: "y", at: Timestamp.now() } });
-  await expect(todayCol).toHaveAttribute("aria-label", /1 of 1 given$/);
+  await expect(todayCol).toHaveAttribute("aria-label", /0 of 2 given$/);
+  await admin().doc(`patients/${id}/days/${today()}`).set({ m1_0: tick("Day Nurse") });
+  await expect(todayCol).toHaveAttribute("aria-label", /1 of 2 given$/);
+});
+
+// A phone asleep past midnight runs no timers; when it wakes, the app must follow the new day
+test("a phone that wakes after midnight follows the new day's doses", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "data check, once is enough");
+  watch(page);
+  const [y, m, d] = today().split("-").map(Number);
+  await page.clock.install({ time: new Date(y, m - 1, d, 23, 58) });
+  const { Timestamp } = createRequire(path.join(CLEANUP, "package.json"))("firebase-admin/firestore");
+  const id = `night${crypto.randomBytes(8).toString("hex")}`;
+  await admin().doc(`patients/${id}`).set({
+    patient: { name: "Night Tracker", pid: "NIG-HT1" }, ownerUid: "someone", builtinTabs: false,
+    medicines: { m1: { name: "Aspirin", everyDays: 1, dosesPerDay: 1, startDate: dayOffset(-1), createdAt: Date.now() - 86400000 } },
+  });
+  await signInGuest(page, null, `/?emulator&patient=${id}`);
+  await expect(status(page, 0)).toHaveText("Not taken yet", { timeout: 20000 });
+
+  await page.clock.setSystemTime(new Date(y, m - 1, d + 1, 0, 5)); // asleep: no timers ran
+  await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange"))); // woken up
+  await admin().doc(`patients/${id}/days/${dayOffset(1)}`).set({ m1_0: { by: "Morning Nurse", uid: "y", at: Timestamp.now() } });
+  await expect(status(page, 0)).toHaveText(/^Given by Morning Nurse/, { timeout: 20000 });
 });
 
 // ---------- Loading, offline and installing ----------
@@ -391,7 +433,9 @@ test("an older tracker's ticks move out of the patient doc", async ({ page }, te
   await expect(page.locator("#patient-name")).toHaveText("Old Tracker", { timeout: 20000 });
   await expect(status(page, 0)).toHaveText("Taken");
   await expect.poll(async () => (await admin().doc(`patients/${id}`).get()).get("doses"), { timeout: 15000 }).toBeUndefined();
-  expect((await admin().doc(`patients/${id}/days/${today()}`).get()).data()).toEqual({ m1_0: true });
+  const moved = (await admin().doc(`patients/${id}/days/${today()}`).get()).data();
+  expect(moved.m1_0).toBe(true);
+  expect(moved.changedAt).toBeDefined(); // stamped, so other phones read it again
   expect((await admin().doc(`patients/${id}/days/2020-01-01`).get()).exists).toBe(false); // older than a week: dropped
 });
 
@@ -534,7 +578,7 @@ test("sheet-report builds the tables, then re-reads only what was used since", a
   await db.doc(`users/${g}`).set({ patientId: `${g}00000000`, recent: { a: {}, b: {} } });
   await db.doc(`patients/${g}00000000`).set({ patient: { name: "Sheet Tracker", pid: "+HT-123" }, ownerUid: g,
     builtinTabs: false, medicines: { m1: { name: "Dolo" } } });
-  await db.doc(`patients/${g}00000000/days/${indiaToday()}`).set({ m1_0: { by: "Sheet Person", uid: g, at: Timestamp.now() } });
+  await db.doc(`patients/${g}00000000/days/${indiaToday()}`).set({ m1_0: { by: "Sheet Person", uid: g, at: Timestamp.now() }, changedAt: Timestamp.now() });
   await db.doc(`patients/${q}00000000`).set({ patient: { name: "Guest Tracker", pid: "GST-123" }, ownerUid: q,
     builtinTabs: false, expireAt: Timestamp.fromMillis(Date.now() + 5 * 86400000) });
   await db.doc(`patients/${q}00000000/days/2020-01-05`).set({ m1_0: true }); // long before this week
@@ -586,7 +630,7 @@ test("sheet-report builds the tables, then re-reads only what was used since", a
   expect(guestIn(quiet)).toEqual(guest);
 
   // The account used it since: its tracker is read again, with today's new dose
-  await db.doc(`patients/${g}00000000/days/${indiaToday()}`).update({ m1_1: { by: "Sheet Person", uid: g, at: Timestamp.now() } });
+  await db.doc(`patients/${g}00000000/days/${indiaToday()}`).update({ m1_1: { by: "Sheet Person", uid: g, at: Timestamp.now() }, changedAt: Timestamp.now() });
   await db.doc(`patients/${q}00000001`).set({ patient: { name: "New Guest", pid: "NEW-123" }, ownerUid: q,
     builtinTabs: false, expireAt: Timestamp.fromMillis(Date.now() + 30 * 86400000) });
   lastRunAt(Date.now() - 10 * 60000);

@@ -179,11 +179,12 @@ function trackerFrom(snap, old) {
 const isGuest = (t) => t.x !== null || byUid.get(t.o)?.providerData.length === 0;
 
 let trackers = {};
-// days/{date} = { "<tab>_<i>": { by, uid, at } | true }
+// days/{date} = { "<tab>_<i>": { by, uid, at } | true, changedAt }
 function countDoses(t, doc) {
   const date = doc.id;
   if (!DATE.test(date) || date > today) return;
-  const ticks = Object.values(doc.data());
+  // Dose keys always contain "_"; changedAt is the app's change stamp, not a dose
+  const ticks = Object.entries(doc.data()).filter(([key]) => key.includes("_")).map(([, tick]) => tick);
   if (!ticks.length) return;
   if (date > t.l) t.l = date;
   if (date < weekStart) return;

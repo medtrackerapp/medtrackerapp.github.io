@@ -5,13 +5,18 @@ import {
   persistentLocalCache,
   persistentMultipleTabManager,
   doc,
+  collection,
+  query,
+  where,
   writeBatch,
   getDoc,
   getDocFromCache,
+  getDocsFromServer,
   onSnapshot,
   setDoc,
   updateDoc,
   deleteField,
+  serverTimestamp,
   arrayUnion,
   arrayRemove,
   FieldPath,
@@ -128,11 +133,14 @@ let user; // undefined until Firebase reports the sign-in state, then null or th
 //   folders: { "f9x…": { name, meds: ["m3k…", …], createdAt } } – a medicine is in one folder at most
 // Dose/reminder keys are `${tabId}_${doseIndex}`; tab IDs never contain "_".
 // Ticked doses live in their own small docs, one per day, so the patient doc stops growing:
-//   patients/{id}/days/{YYYY-MM-DD}: { "4_0": { by: "Priya", uid, at: Timestamp } }  (true if migrated)
+//   patients/{id}/days/{YYYY-MM-DD}: { "4_0": { by: "Priya", uid, at: Timestamp }, changedAt }
+//   (a tick is true if migrated; changedAt = the server's time of the day's last change, see loadPastDays)
 let shared = null; // null until the first snapshot arrives
 let days = {}; // the last HISTORY_DAYS of days/ docs, by date (see watchDays)
+let daysDate = null; // the date watchDays follows live, so a phone waking after midnight moves on
 let daysRun = 0; // bumped when the patient or the day changes, so a slow load of old days is dropped
 const HISTORY_DAYS = 7;
+const CHANGED = "changedAt"; // not a dose: dose keys always contain "_"
 
 // Per-phone only (localStorage), per patient:
 // notified: "4_0" -> last date this phone alerted; folder: open folder id, null for all ("Meds")
@@ -349,6 +357,11 @@ function dayRef(dateStr) {
   return doc(patientRef, "days", dateStr);
 }
 
+// Every change to a day stamps the server's time on it, so other phones can ask which days changed
+function saveDay(dateStr, changes) {
+  setDoc(dayRef(dateStr), { ...changes, [CHANGED]: serverTimestamp() }, { merge: true }).catch(reportError);
+}
+
 // Ticking records who gave the dose and when. Unticking offers Undo, since it wipes that record.
 function toggleDose(tab, i) {
   const key = `${tab.id}_${i}`;
@@ -356,17 +369,16 @@ function toggleDose(tab, i) {
   const before = doseEntry(tab.id, i);
   justToggled = key;
   if (!before) {
-    setDoc(dayRef(today), { [key]: { by: myName(), uid: user.uid, at: Timestamp.now() } }, { merge: true })
-      .catch(reportError);
+    saveDay(today, { [key]: { by: myName(), uid: user.uid, at: Timestamp.now() } });
     return;
   }
-  setDoc(dayRef(today), { [key]: deleteField() }, { merge: true }).catch(reportError);
+  saveDay(today, { [key]: deleteField() });
   if (shared.doses?.[today]?.[key]) { // not migrated yet
     updateDoc(patientRef, new FieldPath("doses", today, key), deleteField()).catch(reportError);
   }
   showToast(`${ordinal(i + 1)} dose of ${tab.name} marked not given.`, {
     action: "Undo",
-    onAction: () => setDoc(dayRef(today), { [key]: before }, { merge: true }).catch(reportError),
+    onAction: () => saveDay(today, { [key]: before }),
   });
 }
 
@@ -1180,15 +1192,13 @@ function openPatient(id) {
   watchDays();
 }
 
-// The last week of days/: today's ticks plus the history strip. Called again at midnight so the
-// window moves with the date. Only today is followed live (1 read on opening, 1 per change):
-// nobody ticks a past day, so each phone reads a finished day from the server once and from its
-// own offline copy after that. Opening the app costs 1 read for doses instead of up to 7.
+// The last week of days/: today's ticks plus the history strip. Called again when the date changes
+// (keepDaysCurrent) so the window moves with it. Only today is followed live: 1 read on opening,
+// 1 per change.
 function watchDays() {
   unwatchDays?.();
   days = {};
-  const run = ++daysRun;
-  const today = todayStr();
+  const today = (daysDate = todayStr());
   unwatchDays = onSnapshot(
     dayRef(today),
     (snap) => {
@@ -1198,35 +1208,69 @@ function watchDays() {
     },
     showConnectionError
   );
-  loadPastDays(run, today);
+  loadPastDays();
 }
 
-// Days this phone read after they ended, per patient (in local), so they come from the cache
-async function loadPastDays(run, today) {
+// A phone that slept past midnight with the app open must follow the new day, or ticks given
+// today wouldn't show on it. Called every 20 s and when the app comes back on screen.
+function keepDaysCurrent() {
+  if (unwatchDays && daysDate !== todayStr()) watchDays();
+}
+
+// Finished days come from this phone's own copy, not the server. One query asks which days changed
+// since this phone last asked (a phone that was offline syncing a dose late, or one whose clock is a
+// few minutes off around midnight), and only those are read again: usually nothing or just today,
+// so it costs 1 read. The stamps are the server's time, so phones' clocks don't matter.
+const RECHECK_MS = 30 * 60000; // a phone left open asks again when it comes back on screen after this
+const SYNC_MARGIN_MS = 5 * 60000; // asks a little further back than the newest change it has seen
+let pastChecked = 0; // when this phone last asked (Date.now()), 0 when that failed (offline)
+
+async function loadPastDays() {
+  const run = ++daysRun;
+  const today = daysDate;
+  pastChecked = Date.now();
   const dates = Array.from({ length: HISTORY_DAYS - 1 }, (_, n) => addDays(today, n - HISTORY_DAYS + 1));
-  const settled = new Set(local.settledDays ?? []);
+  const changed = await changedDays(dates[0]);
+  if (run !== daysRun) return;
+  if (!changed) pastChecked = 0; // offline: ask again once back online
   const loaded = await Promise.all(dates.map(async (date) => {
+    if (changed?.docs.has(date)) return [date, changed.docs.get(date)];
     const ref = dayRef(date);
-    if (settled.has(date)) {
-      try {
-        return { date, snap: await getDocFromCache(ref), settled: true };
-      } catch {} // dropped from the cache meanwhile: read it again
-    }
     try {
-      const snap = await getDoc(ref); // the server, or the cache when offline
-      return { date, snap, settled: !snap.metadata.fromCache };
+      return [date, await getDocFromCache(ref)];
+    } catch {} // never read on this phone, or dropped from its copy: ask the server
+    try {
+      return [date, await getDoc(ref)];
     } catch {
-      return { date, snap: null, settled: false }; // offline and never seen: try again next open
+      return [date, null]; // offline and never seen: next time
     }
   }));
   if (run !== daysRun) return; // another patient, or past midnight, meanwhile
-  for (const { date, snap } of loaded) {
-    // Kept on top of what's there: a migration (migrateDoses) may have added this day meanwhile
-    if (snap?.exists()) days[date] = { ...days[date], ...snap.data() };
+  for (const [date, snap] of loaded) {
+    if (snap?.exists()) days[date] = snap.data();
+    else if (snap) delete days[date];
   }
-  local.settledDays = loaded.filter((d) => d.settled).map((d) => d.date);
+  if (changed) local.daysSyncedAt = changed.newest;
+  delete local.settledDays; // kept by the version before these change checks
   saveLocal();
   render();
+}
+
+// The days changed since this phone last asked, by date, and the newest change among them (the
+// server's clock) to ask from next time. null when offline.
+async function changedDays(firstDate) {
+  const [y, m, d] = addDays(firstDate, -1).split("-").map(Number);
+  // First time on this phone: everything changed this week (from a day early, in case its clock is off)
+  const since = local.daysSyncedAt ?? new Date(y, m - 1, d).getTime();
+  try {
+    const snap = await getDocsFromServer(query(collection(patientRef, "days"),
+      where(CHANGED, ">", Timestamp.fromMillis(since - SYNC_MARGIN_MS))));
+    let newest = since;
+    for (const day of snap.docs) newest = Math.max(newest, day.get(CHANGED)?.toMillis() ?? 0);
+    return { docs: new Map(snap.docs.map((day) => [day.id, day])), newest };
+  } catch {
+    return null;
+  }
 }
 
 // Older trackers kept every day's ticks in one map on the patient doc, which grows until it hits
@@ -1239,11 +1283,13 @@ function migrateDoses() {
   const batch = writeBatch(db);
   for (const [date, ticks] of Object.entries(shared.doses)) {
     if (date < from || !Object.keys(ticks).length) continue;
-    batch.set(dayRef(date), ticks, { merge: true });
-    days[date] = { ...ticks, ...days[date] }; // past days aren't followed live (see watchDays)
+    batch.set(dayRef(date), { ...ticks, [CHANGED]: serverTimestamp() }, { merge: true });
+    days[date] = { ...ticks, ...days[date] }; // shown right away; today's listener and the reload below catch up
   }
   batch.update(patientRef, { doses: deleteField() });
   batch.commit().catch(reportError);
+  // Past days read before this write wouldn't have these ticks; reads from now on include them
+  if (unwatchDays) loadPastDays();
 }
 
 // The account's own tracker (users/{uid}.patientId) is the one that carries its name. A tracker
@@ -2486,14 +2532,19 @@ window.appStarted = true; // tells the reload-on-crash guard in index.html that 
 render(); // the patient loads once onAuthStateChanged reports who's signed in
 
 setInterval(() => {
-  if (todayStr() !== renderedDate) { // new day → everything shows red again
-    if (unwatchDays) watchDays();
-    render();
-  }
+  keepDaysCurrent();
+  if (todayStr() !== renderedDate) render(); // new day → everything shows red again
   refreshTimes();
   checkReminders();
 }, 20000);
 
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) render();
+  if (document.hidden) return;
+  keepDaysCurrent();
+  render();
+  // Left open for a while (a tablet at the nurses' station): a past day may have changed meanwhile
+  if (unwatchDays && Date.now() - pastChecked > RECHECK_MS) loadPastDays();
+});
+addEventListener("online", () => {
+  if (unwatchDays && !pastChecked) loadPastDays(); // the last check failed while offline
 });
