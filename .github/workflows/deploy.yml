@@ -42,9 +42,11 @@ jobs:
             exit 1
           fi
           mkdir _site
-          cp -r index.html style.css app.js medicines.js manifest.webmanifest icons _site/
-          # Bust browser caches: each deploy gets new asset URLs.
+          cp -r index.html style.css app.js medicines.js sw.js manifest.webmanifest icons _site/
+          # Bust browser caches: each deploy gets new asset URLs, and the offline cache (sw.js) a new version.
           sed -i "s/?v=dev/?v=${SHA::8}/g" _site/index.html _site/app.js
+          sed -i "s/const VERSION = \"dev\";/const VERSION = \"${SHA::8}\";/" _site/sw.js
+          grep -q "const VERSION = \"${SHA::8}\";" _site/sw.js # fail the deploy if the version wasn't put in
           printf 'export const firebaseConfig = %s;\n' "$FIREBASE_CONFIG" > _site/firebase-config.js
 
       - uses: actions/configure-pages@v5

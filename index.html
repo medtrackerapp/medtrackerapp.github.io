@@ -27,6 +27,8 @@
     try { theme = localStorage.getItem("medicineTracker:theme") || theme; } catch {}
     document.documentElement.dataset.theme = theme;
     if (theme === "light") document.querySelector('meta[name="theme-color"]').content = "#f3f5fb";
+    // Signed in last time: while the app loads, show the tracker's outline instead of a spinner
+    try { if (localStorage.getItem("medicineTracker:signedIn")) document.documentElement.classList.add("returning"); } catch {}
 
     // If app.js crashes before it starts (e.g. a stale cached copy right after an update),
     // reload once to fetch fresh files instead of sitting on "Loading…".
@@ -47,9 +49,28 @@
 </head>
 <!-- "locked" hides the tracker until the patient's name and ID are known (see render in app.js) -->
 <body class="locked">
-  <div id="boot" class="boot">
+  <div id="boot" class="boot" role="status">
     <span class="boot-spinner" aria-hidden="true"></span>
     <span id="boot-text">Loading…</span>
+    <!-- Someone who signed in before (html.returning) sees the tracker's outline while it loads -->
+    <div class="skeleton" aria-hidden="true">
+      <div class="sk-header">
+        <span class="sk sk-btn"></span>
+        <span class="sk-title"><span class="sk sk-line sk-name"></span><span class="sk sk-line sk-sub"></span></span>
+        <span class="sk sk-btn"></span>
+        <span class="sk sk-btn"></span>
+        <span class="sk sk-btn"></span>
+      </div>
+      <div class="sk sk-tabs"></div>
+      <div class="sk-card">
+        <span class="sk sk-line sk-heading"></span>
+        <span class="sk sk-line sk-sub"></span>
+        <span class="sk sk-track"></span>
+        <span class="sk-days"><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span><span class="sk"></span></span>
+      </div>
+      <div class="sk-card sk-dose"><span class="sk sk-circle"></span><span class="sk-title"><span class="sk sk-line sk-name"></span><span class="sk sk-line sk-sub"></span></span></div>
+      <div class="sk-card sk-dose"><span class="sk sk-circle"></span><span class="sk-title"><span class="sk sk-line sk-name"></span><span class="sk sk-line sk-sub"></span></span></div>
+    </div>
   </div>
 
   <!-- Signed-out screen: Google login or guest; guests then give a name before the tracker opens -->
@@ -217,6 +238,21 @@
     <ul id="dose-list" class="dose-list"></ul>
 
     </div>
+
+    <!-- Offer to install the app (hidden once installed, or after "Not now"; also on the Info screen) -->
+    <aside id="install-card" class="install-card hidden" aria-label="Install the app">
+      <span class="brand-icon install-card-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.5 20.5 3.5 13.5a4.95 4.95 0 1 1 7-7l7 7a4.95 4.95 0 1 1-7 7Z"/><path d="m8.5 8.5 7 7"/></svg>
+      </span>
+      <span class="install-card-text">
+        <strong>Install the app</strong>
+        <span id="install-card-sub">Faster, and works offline.</span>
+      </span>
+      <button id="install-card-btn" type="button" class="primary install-card-btn hidden">Install</button>
+      <button id="install-card-close" type="button" class="install-card-close" title="Not now" aria-label="Not now">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </aside>
   </main>
 
   <button id="add-btn" class="fab" title="Add medicine" aria-label="Add medicine">
@@ -322,6 +358,13 @@
       <section id="info-expiry-box" class="field hidden">
         <span class="field-label">Guest tracker</span>
         <p id="info-expiry" class="info-text"></p>
+      </section>
+
+      <!-- When the phone can install the app (or, on iPhone, how to) -->
+      <section id="install-box" class="field hidden">
+        <span class="field-label">Install app</span>
+        <p id="install-text" class="info-text"></p>
+        <button id="install-btn" type="button" class="primary hidden">Install app</button>
       </section>
 
       <section class="field">

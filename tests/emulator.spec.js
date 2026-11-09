@@ -5,7 +5,7 @@
 const { test, expect } = require("@playwright/test");
 const path = require("path");
 const crypto = require("crypto");
-const { execFileSync } = require("child_process");
+const { execFileSync, spawn } = require("child_process");
 const { createRequire } = require("module");
 
 const FIRESTORE = process.env.FIRESTORE_EMULATOR_HOST;
@@ -32,6 +32,13 @@ function hhmm(date) {
 // The Sheet script counts doses by India date (like the app's users' phones), whatever this machine's time zone
 function indiaToday() {
   return new Date(Date.now() + 5.5 * 3600000).toISOString().slice(0, 10);
+}
+
+// A date n days from today, like today() (this machine's time zone, as the app in the browser uses)
+function dayOffset(n) {
+  const d = new Date();
+  d.setDate(d.getDate() + n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 function today() {
@@ -202,6 +209,111 @@ test("the last 7 days show each dose, today included", async ({ page }) => {
   await expect(page.locator("#history .history-day").first()).toHaveAttribute("aria-label", /No History$/);
   await todayCol.click();
   await expect(page.locator("#toast-text")).toContainText("1st: History Nurse");
+});
+
+// Past days are read once per phone, then come from its own copy; only today is followed live
+test("finished days are read once, then come from the phone's own copy", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "data check, once is enough");
+  watch(page);
+  const { Timestamp } = createRequire(path.join(CLEANUP, "package.json"))("firebase-admin/firestore");
+  const id = `cache${crypto.randomBytes(8).toString("hex")}`;
+  await admin().doc(`patients/${id}`).set({
+    patient: { name: "Cache Tracker", pid: "CAC-HE1" }, ownerUid: "someone", builtinTabs: false,
+    medicines: { m1: { name: "Aspirin", everyDays: 1, dosesPerDay: 1, startDate: dayOffset(-3), createdAt: Date.now() - 3 * 86400000 } },
+  });
+  await admin().doc(`patients/${id}/days/${dayOffset(-1)}`).set({ m1_0: { by: "Night Nurse", uid: "x", at: Timestamp.now() } });
+  await signInGuest(page, null, `/?emulator&patient=${id}`);
+  const yesterday = page.locator("#history .history-day").nth(5);
+  await expect(yesterday).toHaveAttribute("aria-label", /1 of 1 given$/, { timeout: 20000 });
+
+  // Changed on the server afterwards: this phone doesn't read that day again
+  await admin().doc(`patients/${id}/days/${dayOffset(-1)}`).delete();
+  await page.reload();
+  await expect(page.locator("#patient-name")).toHaveText("Cache Tracker", { timeout: 20000 });
+  await expect(yesterday).toHaveAttribute("aria-label", /1 of 1 given$/);
+  // Today is still live
+  const todayCol = page.locator("#history .history-day.today");
+  await expect(todayCol).toHaveAttribute("aria-label", /0 of 1 given$/);
+  await admin().doc(`patients/${id}/days/${today()}`).set({ m1_0: { by: "Day Nurse", uid: "y", at: Timestamp.now() } });
+  await expect(todayCol).toHaveAttribute("aria-label", /1 of 1 given$/);
+});
+
+// ---------- Loading, offline and installing ----------
+test("someone who signed in before sees the tracker's outline while it loads", async ({ page }) => {
+  watch(page);
+  await signInGuest(page, "Outline Nurse");
+  await addMedicine(page, "Outline Med");
+  // Hold the database's answers back, so the loading state stays on screen
+  const slow = async (route) => {
+    await new Promise((r) => setTimeout(r, 2500));
+    await route.continue().catch(() => {});
+  };
+  await page.route("http://127.0.0.1:8085/**", slow);
+  await page.reload();
+  await expect(page.locator("#boot .skeleton")).toBeVisible();
+  await expect(page.locator("#boot .boot-spinner")).toBeHidden();
+  await page.unroute("http://127.0.0.1:8085/**", slow);
+  await expect(page.locator("#progress-title")).toHaveText("Outline Med", { timeout: 30000 });
+  await expect(page.locator("#boot")).toBeHidden();
+});
+
+// Playwright's offline mode doesn't reach the offline worker's own requests, so this test serves
+// the site itself and really switches that server off
+test("once opened online, the app opens without a connection", async ({ page, context }, testInfo) => {
+  test.skip(testInfo.project.name !== "desktop", "once is enough");
+  const port = 3100 + Math.floor(Math.random() * 800);
+  const server = spawn("python", ["-m", "http.server", String(port), "--bind", "localhost"], { cwd: path.join(__dirname, ".."), stdio: "ignore" });
+  const stopped = new Promise((resolve) => server.once("exit", resolve));
+  try {
+    // (Node's fetch trips over this server's way of closing connections, so plain http)
+    const up = () => new Promise((resolve) => require("http").get(`http://localhost:${port}/`, (res) => {
+      res.resume();
+      resolve(res.statusCode === 200);
+    }).on("error", () => resolve(false)));
+    await expect.poll(up, { timeout: 15000 }).toBe(true);
+    watch(page);
+    await signInGuest(page, "Offline Nurse", `http://localhost:${port}/?emulator`);
+    await addMedicine(page, "Offline Med");
+    // The offline worker took over and keeps the app's files
+    await page.waitForFunction(() => navigator.serviceWorker?.controller, null, { timeout: 20000 });
+    await expect.poll(() => page.evaluate(async () => !!(await caches.match("app.js?v=dev"))), { timeout: 20000 }).toBe(true);
+
+    server.kill();
+    await stopped;
+    await context.setOffline(true); // the database too: the tracker comes from the phone's own copy
+    await page.reload();
+    await expect(page.locator("#progress-title")).toHaveText("Offline Med", { timeout: 30000 });
+  } finally {
+    server.kill();
+    await context.setOffline(false);
+  }
+});
+
+test("the app offers to install itself; Not now puts the card away, Info keeps the button", async ({ page }) => {
+  watch(page);
+  await signInGuest(page, "Install Nurse");
+  await addMedicine(page, "Install Med");
+  // The browser's install offer, as Chrome sends it
+  const offer = () => page.evaluate(() => {
+    const e = new Event("beforeinstallprompt", { cancelable: true });
+    e.prompt = () => { window.installPrompted = (window.installPrompted ?? 0) + 1; return Promise.resolve(); };
+    window.dispatchEvent(e);
+  });
+  await offer();
+  await expect(page.locator("#install-card")).toBeVisible();
+  await page.locator("#install-card-btn").click();
+  expect(await page.evaluate(() => window.installPrompted)).toBe(1);
+  await expect(page.locator("#install-card")).toBeHidden(); // the browser's dialog opens only once per offer
+
+  await offer();
+  await page.locator("#install-card-close").click();
+  await expect(page.locator("#install-card")).toBeHidden();
+  await page.reload();
+  await expect(page.locator("#progress-title")).toHaveText("Install Med", { timeout: 20000 });
+  await offer();
+  await expect(page.locator("#install-card")).toBeHidden(); // Not now is remembered
+  await page.locator("#info-btn").click();
+  await expect(page.locator("#install-btn")).toBeVisible();
 });
 
 // ---------- Undo and confirm ----------

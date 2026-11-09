@@ -5,12 +5,9 @@ import {
   persistentLocalCache,
   persistentMultipleTabManager,
   doc,
-  collection,
-  query,
-  where,
-  documentId,
   writeBatch,
   getDoc,
+  getDocFromCache,
   onSnapshot,
   setDoc,
   updateDoc,
@@ -134,6 +131,7 @@ let user; // undefined until Firebase reports the sign-in state, then null or th
 //   patients/{id}/days/{YYYY-MM-DD}: { "4_0": { by: "Priya", uid, at: Timestamp } }  (true if migrated)
 let shared = null; // null until the first snapshot arrives
 let days = {}; // the last HISTORY_DAYS of days/ docs, by date (see watchDays)
+let daysRun = 0; // bumped when the patient or the day changes, so a slow load of old days is dropped
 const HISTORY_DAYS = 7;
 
 // Per-phone only (localStorage), per patient:
@@ -590,6 +588,13 @@ const els = {
   folderNameInput: document.getElementById("folder-name-input"),
   folderPickList: document.getElementById("folder-pick-list"),
   folderCancel: document.getElementById("folder-cancel"),
+  installBox: document.getElementById("install-box"),
+  installText: document.getElementById("install-text"),
+  installBtn: document.getElementById("install-btn"),
+  installCard: document.getElementById("install-card"),
+  installCardSub: document.getElementById("install-card-sub"),
+  installCardBtn: document.getElementById("install-card-btn"),
+  installCardClose: document.getElementById("install-card-close"),
 };
 
 function formatTime(hhmm) {
@@ -1137,10 +1142,13 @@ function stopWatching() {
   unwatchDays?.();
   unsubscribe = unwatchDays = null;
   days = {};
+  daysRun++;
 }
 
 function openPatient(id) {
   stopWatching();
+  // Another patient: show the loading outline, never the last patient's doses under the new one
+  if (id !== patientId) shared = null;
   patientId = id;
   patientRef = doc(db, "patients", id);
   draft = false;
@@ -1168,24 +1176,57 @@ function openPatient(id) {
     },
     showConnectionError
   );
+  render();
   watchDays();
 }
 
-// Only the last week of days/ is loaded: today's ticks plus the history strip.
-// Called again at midnight so the window moves with the date.
+// The last week of days/: today's ticks plus the history strip. Called again at midnight so the
+// window moves with the date. Only today is followed live (1 read on opening, 1 per change):
+// nobody ticks a past day, so each phone reads a finished day from the server once and from its
+// own offline copy after that. Opening the app costs 1 read for doses instead of up to 7.
 function watchDays() {
   unwatchDays?.();
   days = {};
-  const from = addDays(todayStr(), -(HISTORY_DAYS - 1));
+  const run = ++daysRun;
+  const today = todayStr();
   unwatchDays = onSnapshot(
-    query(collection(patientRef, "days"), where(documentId(), ">=", from)),
+    dayRef(today),
     (snap) => {
-      days = {};
-      snap.forEach((d) => { days[d.id] = d.data(); });
+      if (snap.exists()) days[today] = snap.data();
+      else delete days[today];
       render();
     },
     showConnectionError
   );
+  loadPastDays(run, today);
+}
+
+// Days this phone read after they ended, per patient (in local), so they come from the cache
+async function loadPastDays(run, today) {
+  const dates = Array.from({ length: HISTORY_DAYS - 1 }, (_, n) => addDays(today, n - HISTORY_DAYS + 1));
+  const settled = new Set(local.settledDays ?? []);
+  const loaded = await Promise.all(dates.map(async (date) => {
+    const ref = dayRef(date);
+    if (settled.has(date)) {
+      try {
+        return { date, snap: await getDocFromCache(ref), settled: true };
+      } catch {} // dropped from the cache meanwhile: read it again
+    }
+    try {
+      const snap = await getDoc(ref); // the server, or the cache when offline
+      return { date, snap, settled: !snap.metadata.fromCache };
+    } catch {
+      return { date, snap: null, settled: false }; // offline and never seen: try again next open
+    }
+  }));
+  if (run !== daysRun) return; // another patient, or past midnight, meanwhile
+  for (const { date, snap } of loaded) {
+    // Kept on top of what's there: a migration (migrateDoses) may have added this day meanwhile
+    if (snap?.exists()) days[date] = { ...days[date], ...snap.data() };
+  }
+  local.settledDays = loaded.filter((d) => d.settled).map((d) => d.date);
+  saveLocal();
+  render();
 }
 
 // Older trackers kept every day's ticks in one map on the patient doc, which grows until it hits
@@ -1197,7 +1238,9 @@ function migrateDoses() {
   const from = addDays(todayStr(), -(HISTORY_DAYS - 1));
   const batch = writeBatch(db);
   for (const [date, ticks] of Object.entries(shared.doses)) {
-    if (date >= from && Object.keys(ticks).length) batch.set(dayRef(date), ticks, { merge: true });
+    if (date < from || !Object.keys(ticks).length) continue;
+    batch.set(dayRef(date), ticks, { merge: true });
+    days[date] = { ...ticks, ...days[date] }; // past days aren't followed live (see watchDays)
   }
   batch.update(patientRef, { doses: deleteField() });
   batch.commit().catch(reportError);
@@ -1265,10 +1308,14 @@ async function assignPid() {
 
 function showConnectionError(err) {
   console.error(err);
+  els.boot.classList.add("boot-error");
   els.bootText.textContent = "Not connected";
   els.todayLabel.textContent = "Not connected";
   showToast("Couldn't connect to the database. Check that Firestore is created and the rules are published.");
 }
+
+// Remembered so the next visit shows the tracker's outline while it loads, not a spinner (index.html)
+const SIGNED_IN = "medicineTracker:signedIn";
 
 onAuthStateChanged(auth, async (u) => {
   user = u;
@@ -1276,6 +1323,12 @@ onAuthStateChanged(auth, async (u) => {
   stopWatching();
   shared = null;
   draft = false;
+  try {
+    if (u) localStorage.setItem(SIGNED_IN, "1");
+    else localStorage.removeItem(SIGNED_IN);
+  } catch {}
+  document.documentElement.classList.toggle("returning", !!u);
+  els.boot.classList.remove("boot-error");
   els.bootText.textContent = "Loading…";
   render();
   if (!u) return;
@@ -2280,6 +2333,69 @@ els.patientPidForm.addEventListener("submit", async (e) => {
     submit.disabled = false;
   }
 });
+
+// ---------- Offline (sw.js keeps the app's files on the phone) ----------
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("sw.js").catch((err) => console.warn("Offline support unavailable:", err));
+  // After a deploy the new files arrive in the background; this page keeps running the old ones
+  let hadWorker = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!hadWorker) return void (hadWorker = true); // the very first install, not an update
+    showToast("A new version of the app is ready.", { action: "Refresh", onAction: () => location.reload() });
+  });
+}
+
+// ---------- Install app ----------
+// Chrome, Edge and Android offer their own install dialog (beforeinstallprompt), opened from our
+// buttons. iPhones have none, so they get the steps instead. Hidden once the app is installed.
+let installPrompt = null;
+const installed = () => matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+const isApple = /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+  (/macintosh/i.test(navigator.userAgent) && navigator.maxTouchPoints > 1); // iPads report a Mac
+const INSTALL_CLOSED = "medicineTracker:installClosed";
+
+function renderInstall() {
+  const canPrompt = !!installPrompt;
+  const show = !installed() && (canPrompt || isApple);
+  let closed = false;
+  try { closed = !!localStorage.getItem(INSTALL_CLOSED); } catch {}
+  els.installBox.classList.toggle("hidden", !show);
+  els.installBtn.classList.toggle("hidden", !canPrompt);
+  els.installText.textContent = canPrompt
+    ? "Opens straight from your home screen, faster, and works without a connection."
+    : "Tap the Share button, then “Add to Home Screen”. It opens faster and works without a connection.";
+  els.installCard.classList.toggle("hidden", !show || closed);
+  els.installCardBtn.classList.toggle("hidden", !canPrompt);
+  els.installCardSub.textContent = canPrompt ? "Faster, and works offline." : "Tap Share, then “Add to Home Screen”.";
+}
+
+async function install() {
+  const prompt = installPrompt;
+  if (!prompt) return;
+  installPrompt = null; // the browser's dialog can only be shown once; it offers another later
+  renderInstall();
+  try {
+    await prompt.prompt();
+  } catch {}
+}
+
+window.addEventListener("beforeinstallprompt", (e) => {
+  e.preventDefault(); // our buttons open it, instead of the browser's own mini bar
+  installPrompt = e;
+  renderInstall();
+});
+window.addEventListener("appinstalled", () => {
+  installPrompt = null;
+  renderInstall();
+  showToast("Medicine Tracker is installed. Open it from your home screen.");
+});
+els.installBtn.addEventListener("click", install);
+els.installCardBtn.addEventListener("click", install);
+els.installCardClose.addEventListener("click", () => {
+  try { localStorage.setItem(INSTALL_CLOSED, "1"); } catch {}
+  renderInstall(); // still available on the Info screen
+});
+renderInstall();
 
 // ---------- Share link with the other nurses ----------
 els.shareBtn.addEventListener("click", async () => {
