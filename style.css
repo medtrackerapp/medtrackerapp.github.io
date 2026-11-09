@@ -1,5 +1,7 @@
 /* ---------- Theme tokens ---------- */
-:root {
+/* Indigo, the default colour theme. [data-palette="indigo"] lets the Theme screen draw its swatch. */
+:root,
+[data-palette="indigo"] {
   --bg: #f3f5fb;
   --bg-glow-1: rgba(99, 102, 241, 0.16);
   --bg-glow-2: rgba(20, 184, 166, 0.14);
@@ -19,6 +21,11 @@
   --green-soft: #e8f8ef;
   --shadow: 0 1px 2px rgba(20, 26, 50, 0.04), 0 8px 24px rgba(20, 26, 50, 0.06);
   --shadow-lg: 0 20px 50px rgba(20, 26, 50, 0.18);
+  /* Text and icons on the accent and green gradients, and the glow under accent buttons */
+  --on-accent: #fff;
+  --on-green: #fff;
+  --accent-shadow: rgba(91, 95, 240, 0.3);
+  --font: "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color-scheme: light;
 }
 
@@ -47,7 +54,8 @@
   }
 }
 
-:root[data-theme="dark"] {
+:root[data-theme="dark"],
+[data-palette="indigo"][data-theme="dark"] {
   --bg: #0d1020;
   --bg-glow-1: rgba(99, 102, 241, 0.22);
   --bg-glow-2: rgba(20, 184, 166, 0.14);
@@ -70,13 +78,488 @@
   color-scheme: dark;
 }
 
+/* ---------- Colour themes (Settings > Theme) ---------- */
+/* Picked per phone (localStorage medicineTracker:palette) and set as data-palette on <html> before
+   the page paints. Indigo, above, is the default. Any element with data-palette (and data-theme)
+   takes that theme's colours, which is how the Theme screen draws each theme's swatch. */
+[data-palette="scrubs"] {
+  --bg: #edf3f6;
+  --bg-glow-1: rgba(29, 106, 153, 0.14);
+  --bg-glow-2: rgba(12, 123, 128, 0.12);
+  --surface: #ffffff;
+  --surface-2: #f2f7f9;
+  --border: #d7e3ea;
+  --text: #0f2433;
+  --muted: #4f6878;
+  --accent: #1d6a99;
+  --accent-2: #0c7b80;
+  --accent-soft: rgba(29, 106, 153, 0.1);
+  --red: #d23f3f;
+  --red-soft: #fdf0ee;
+  --red-border: #f1c2bd;
+  --green: #17834a;
+  --green-2: #0d7f66;
+  --green-soft: #e3f4ea;
+  --shadow: 0 1px 2px rgba(15, 36, 51, 0.04), 0 8px 24px rgba(15, 36, 51, 0.06);
+  --shadow-lg: 0 20px 50px rgba(15, 36, 51, 0.18);
+  --on-accent: #ffffff;
+  --on-green: #ffffff;
+  --accent-shadow: rgba(29, 106, 153, 0.3);
+}
+
+[data-palette="scrubs"][data-theme="dark"] {
+  --bg: #08151d;
+  --bg-glow-1: rgba(108, 184, 230, 0.16);
+  --bg-glow-2: rgba(79, 209, 197, 0.1);
+  --surface: #0f202b;
+  --surface-2: #152a37;
+  --border: #23404f;
+  --text: #e3eef4;
+  --muted: #8fa9b8;
+  --accent: #6cb8e6;
+  --accent-2: #4fd1c5;
+  --accent-soft: rgba(108, 184, 230, 0.14);
+  --red: #ff6f6f;
+  --red-soft: rgba(255, 111, 111, 0.1);
+  --red-border: rgba(255, 111, 111, 0.35);
+  --green: #3ccf8e;
+  --green-2: #4fd1c5;
+  --green-soft: rgba(60, 207, 142, 0.12);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.5);
+  --on-accent: #062030;
+  --on-green: #052618;
+  --accent-shadow: rgba(108, 184, 230, 0.25);
+}
+
+[data-palette="night-shift"] {
+  --bg: #f4eee4;
+  --bg-glow-1: rgba(154, 91, 0, 0.1);
+  --bg-glow-2: rgba(168, 98, 10, 0.06);
+  --surface: #fffbf4;
+  --surface-2: #f6eee1;
+  --border: #e8dcc8;
+  --text: #2a1f12;
+  --muted: #75644c;
+  --accent: #9a5b00;
+  --accent-2: #a8620a;
+  --accent-soft: rgba(154, 91, 0, 0.1);
+  --red: #c62f3a;
+  --red-soft: #fcedec;
+  --red-border: #f0c2c0;
+  --green: #4d7c0f;
+  --green-2: #5f7a12;
+  --green-soft: #eef3df;
+  --shadow: 0 1px 2px rgba(42, 31, 18, 0.05), 0 8px 24px rgba(42, 31, 18, 0.07);
+  --shadow-lg: 0 20px 50px rgba(42, 31, 18, 0.2);
+  --on-accent: #ffffff;
+  --on-green: #ffffff;
+  --accent-shadow: rgba(154, 91, 0, 0.28);
+}
+
+[data-palette="night-shift"][data-theme="dark"] {
+  --bg: #14100b;
+  --bg-glow-1: rgba(242, 169, 59, 0.12);
+  --bg-glow-2: rgba(224, 145, 58, 0.07);
+  --surface: #1e1810;
+  --surface-2: #272016;
+  --border: #3a2f20;
+  --text: #f3e6d0;
+  --muted: #b09a7a;
+  --accent: #f2a93b;
+  --accent-2: #e0913a;
+  --accent-soft: rgba(242, 169, 59, 0.14);
+  --red: #ff6b6b;
+  --red-soft: rgba(255, 107, 107, 0.1);
+  --red-border: rgba(255, 107, 107, 0.35);
+  --green: #a3c95a;
+  --green-2: #c9b24a;
+  --green-soft: rgba(163, 201, 90, 0.12);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.5);
+  --on-accent: #1d1206;
+  --on-green: #171a07;
+  --accent-shadow: rgba(242, 169, 59, 0.22);
+}
+
+[data-palette="rx-pad"] {
+  --bg: #eef3ec;
+  --bg-glow-1: rgba(30, 58, 138, 0.1);
+  --bg-glow-2: rgba(77, 124, 15, 0.1);
+  --surface: #fbfdf9;
+  --surface-2: #f0f5ed;
+  --border: #d3dfcf;
+  --text: #14213d;
+  --muted: #536079;
+  --accent: #1e3a8a;
+  --accent-2: #2c5fd0;
+  --accent-soft: rgba(30, 58, 138, 0.09);
+  --red: #c0392b;
+  --red-soft: #fbeeec;
+  --red-border: #efc1bb;
+  --green: #2f7d32;
+  --green-2: #2e7a4a;
+  --green-soft: #e5f2e3;
+  --shadow: 0 1px 2px rgba(20, 33, 61, 0.05), 0 8px 24px rgba(20, 33, 61, 0.06);
+  --shadow-lg: 0 20px 50px rgba(20, 33, 61, 0.18);
+  --on-accent: #ffffff;
+  --on-green: #ffffff;
+  --accent-shadow: rgba(30, 58, 138, 0.28);
+}
+
+[data-palette="rx-pad"][data-theme="dark"] {
+  --bg: #0b1410;
+  --bg-glow-1: rgba(143, 180, 255, 0.12);
+  --bg-glow-2: rgba(132, 204, 22, 0.07);
+  --surface: #121d18;
+  --surface-2: #18261f;
+  --border: #26392f;
+  --text: #e4eee7;
+  --muted: #93a89b;
+  --accent: #8fb4ff;
+  --accent-2: #a9c4ff;
+  --accent-soft: rgba(143, 180, 255, 0.14);
+  --red: #ff6f6f;
+  --red-soft: rgba(255, 111, 111, 0.1);
+  --red-border: rgba(255, 111, 111, 0.35);
+  --green: #6fcf73;
+  --green-2: #8fd47a;
+  --green-soft: rgba(111, 207, 115, 0.12);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.5);
+  --on-accent: #0a1633;
+  --on-green: #0a200c;
+  --accent-shadow: rgba(143, 180, 255, 0.22);
+}
+
+[data-palette="graphite"] {
+  --bg: #f4f4f5;
+  --bg-glow-1: rgba(0, 0, 0, 0);
+  --bg-glow-2: rgba(0, 0, 0, 0);
+  --surface: #ffffff;
+  --surface-2: #f4f4f5;
+  --border: #e1e1e5;
+  --text: #18181b;
+  --muted: #61616a;
+  --accent: #2457d6;
+  --accent-2: #2457d6;
+  --accent-soft: rgba(36, 87, 214, 0.08);
+  --red: #d1342f;
+  --red-soft: #fdeeed;
+  --red-border: #f2c3c1;
+  --green: #1d7f45;
+  --green-2: #1d7f45;
+  --green-soft: #e6f4ec;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.16);
+  --on-accent: #ffffff;
+  --on-green: #ffffff;
+  --accent-shadow: rgba(0, 0, 0, 0);
+}
+
+[data-palette="graphite"][data-theme="dark"] {
+  --bg: #101012;
+  --bg-glow-1: rgba(0, 0, 0, 0);
+  --bg-glow-2: rgba(0, 0, 0, 0);
+  --surface: #18181b;
+  --surface-2: #212125;
+  --border: #2f2f35;
+  --text: #ececee;
+  --muted: #a0a0a9;
+  --accent: #7ea6ff;
+  --accent-2: #7ea6ff;
+  --accent-soft: rgba(126, 166, 255, 0.12);
+  --red: #ff6b6b;
+  --red-soft: rgba(255, 107, 107, 0.1);
+  --red-border: rgba(255, 107, 107, 0.32);
+  --green: #4ade80;
+  --green-2: #4ade80;
+  --green-soft: rgba(74, 222, 128, 0.1);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.55);
+  --on-accent: #0b1530;
+  --on-green: #052e16;
+  --accent-shadow: rgba(0, 0, 0, 0);
+}
+
+[data-palette="jamun"] {
+  --bg: #f6f1f6;
+  --bg-glow-1: rgba(107, 42, 140, 0.12);
+  --bg-glow-2: rgba(156, 59, 138, 0.08);
+  --surface: #ffffff;
+  --surface-2: #f8f3f8;
+  --border: #eadfea;
+  --text: #2a1630;
+  --muted: #6c5872;
+  --accent: #6b2a8c;
+  --accent-2: #9c3b8a;
+  --accent-soft: rgba(107, 42, 140, 0.09);
+  --red: #d0363b;
+  --red-soft: #fdeff0;
+  --red-border: #f3c3c6;
+  --green: #1f8450;
+  --green-2: #157a6c;
+  --green-soft: #e4f4ec;
+  --shadow: 0 1px 2px rgba(42, 22, 48, 0.05), 0 8px 24px rgba(42, 22, 48, 0.07);
+  --shadow-lg: 0 20px 50px rgba(42, 22, 48, 0.2);
+  --on-accent: #ffffff;
+  --on-green: #ffffff;
+  --accent-shadow: rgba(107, 42, 140, 0.3);
+}
+
+[data-palette="jamun"][data-theme="dark"] {
+  --bg: #150d18;
+  --bg-glow-1: rgba(207, 162, 230, 0.16);
+  --bg-glow-2: rgba(229, 156, 201, 0.08);
+  --surface: #1f1424;
+  --surface-2: #281b2e;
+  --border: #3b2a42;
+  --text: #f1e7f3;
+  --muted: #b39cb9;
+  --accent: #cfa2e6;
+  --accent-2: #e59cc9;
+  --accent-soft: rgba(207, 162, 230, 0.14);
+  --red: #ff6b6b;
+  --red-soft: rgba(255, 107, 107, 0.1);
+  --red-border: rgba(255, 107, 107, 0.35);
+  --green: #4cd38f;
+  --green-2: #45c9b4;
+  --green-soft: rgba(76, 211, 143, 0.12);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.5);
+  --on-accent: #24102c;
+  --on-green: #062414;
+  --accent-shadow: rgba(207, 162, 230, 0.22);
+}
+
+[data-palette="high-contrast"] {
+  --bg: #ffffff;
+  --bg-glow-1: rgba(0, 0, 0, 0);
+  --bg-glow-2: rgba(0, 0, 0, 0);
+  --surface: #ffffff;
+  --surface-2: #f0f0f0;
+  --border: #3a3a3a;
+  --text: #000000;
+  --muted: #3a3a3a;
+  --accent: #0039b3;
+  --accent-2: #0039b3;
+  --accent-soft: rgba(0, 57, 179, 0.1);
+  --red: #b0001e;
+  --red-soft: #fff0f2;
+  --red-border: #b0001e;
+  --green: #0a6b2c;
+  --green-2: #0a6b2c;
+  --green-soft: #e2f2e7;
+  --shadow: none;
+  --shadow-lg: 0 0 0 2px #000000;
+  --on-accent: #ffffff;
+  --on-green: #ffffff;
+  --accent-shadow: rgba(0, 0, 0, 0);
+  --font: "Atkinson Hyperlegible", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+[data-palette="high-contrast"][data-theme="dark"] {
+  --bg: #000000;
+  --bg-glow-1: rgba(0, 0, 0, 0);
+  --bg-glow-2: rgba(0, 0, 0, 0);
+  --surface: #0a0a0a;
+  --surface-2: #1c1c1c;
+  --border: #b5b5b5;
+  --text: #ffffff;
+  --muted: #d6d6d6;
+  --accent: #9cc0ff;
+  --accent-2: #9cc0ff;
+  --accent-soft: rgba(156, 192, 255, 0.18);
+  --red: #ff8a8a;
+  --red-soft: rgba(255, 138, 138, 0.16);
+  --red-border: #ff8a8a;
+  --green: #6ee59a;
+  --green-2: #6ee59a;
+  --green-soft: rgba(110, 229, 154, 0.16);
+  --shadow: none;
+  --shadow-lg: 0 0 0 2px #ffffff;
+  --on-accent: #000000;
+  --on-green: #000000;
+  --accent-shadow: rgba(0, 0, 0, 0);
+}
+
+/* Designs V2 (iPhone style) as themes: their colours, Apple's system font (Inter elsewhere), and a
+   little of their shape. Their new layout (tab bar, tick list) is not part of a theme. */
+[data-palette="clarity"] {
+  --bg: #f2f2f7;
+  --bg-glow-1: rgba(0, 0, 0, 0);
+  --bg-glow-2: rgba(0, 0, 0, 0);
+  --surface: #ffffff;
+  --surface-2: #f2f2f7;
+  --border: #e3e3e8;
+  --text: #000000;
+  --muted: #6c6c70;
+  --accent: #005fcc;
+  --accent-2: #005fcc;
+  --accent-soft: rgba(0, 95, 204, 0.1);
+  --red: #d70015;
+  --red-soft: #fff0f1;
+  --red-border: #f5c2c6;
+  --green: #1e7d38;
+  --green-2: #1e7d38;
+  --green-soft: #e6f4ea;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.18);
+  --on-accent: #ffffff;
+  --on-green: #ffffff;
+  --accent-shadow: rgba(0, 0, 0, 0);
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, sans-serif;
+}
+
+[data-palette="clarity"][data-theme="dark"] {
+  --bg: #000000;
+  --bg-glow-1: rgba(0, 0, 0, 0);
+  --bg-glow-2: rgba(0, 0, 0, 0);
+  --surface: #1c1c1e;
+  --surface-2: #2c2c2e;
+  --border: #38383a;
+  --text: #ffffff;
+  --muted: #a1a1a8;
+  --accent: #4da3ff;
+  --accent-2: #4da3ff;
+  --accent-soft: rgba(77, 163, 255, 0.16);
+  --red: #ff453a;
+  --red-soft: rgba(255, 69, 58, 0.14);
+  --red-border: rgba(255, 69, 58, 0.4);
+  --green: #30d158;
+  --green-2: #30d158;
+  --green-soft: rgba(48, 209, 88, 0.14);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.6);
+  --on-accent: #001a35;
+  --on-green: #03230e;
+  --accent-shadow: rgba(0, 0, 0, 0);
+}
+
+[data-palette="glass"] {
+  --bg: #e9eff4;
+  --bg-glow-1: rgba(48, 176, 199, 0.34);
+  --bg-glow-2: rgba(140, 130, 255, 0.28);
+  --surface: rgba(255, 255, 255, 0.62);
+  --surface-2: rgba(118, 128, 140, 0.1);
+  --border: rgba(40, 60, 80, 0.14);
+  --text: #0b1b24;
+  --muted: #4f5f69;
+  --accent: #075f7d;
+  --accent-2: #0a7a8f;
+  --accent-soft: rgba(7, 95, 125, 0.12);
+  --red: #c4001a;
+  --red-soft: rgba(196, 0, 26, 0.1);
+  --red-border: rgba(196, 0, 26, 0.35);
+  --green: #1b7a43;
+  --green-2: #147564;
+  --green-soft: rgba(27, 122, 67, 0.12);
+  --shadow: 0 8px 24px rgba(30, 50, 70, 0.08);
+  --shadow-lg: 0 20px 50px rgba(30, 50, 70, 0.2);
+  --on-accent: #ffffff;
+  --on-green: #ffffff;
+  --accent-shadow: rgba(7, 95, 125, 0.25);
+  --sheet-bg: rgba(246, 249, 251, 0.88);
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, sans-serif;
+}
+
+[data-palette="glass"][data-theme="dark"] {
+  --bg: #0a1117;
+  --bg-glow-1: rgba(48, 176, 199, 0.3);
+  --bg-glow-2: rgba(110, 100, 240, 0.3);
+  --surface: rgba(255, 255, 255, 0.07);
+  --surface-2: rgba(255, 255, 255, 0.08);
+  --border: rgba(255, 255, 255, 0.13);
+  --text: #f2f7fa;
+  --muted: #a3b3bd;
+  --accent: #5ccfe6;
+  --accent-2: #7fb8ff;
+  --accent-soft: rgba(92, 207, 230, 0.16);
+  --red: #ff6961;
+  --red-soft: rgba(255, 105, 97, 0.14);
+  --red-border: rgba(255, 105, 97, 0.4);
+  --green: #30d158;
+  --green-2: #3ddc97;
+  --green-soft: rgba(48, 209, 88, 0.14);
+  --shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.5);
+  --on-accent: #03202a;
+  --on-green: #03230e;
+  --accent-shadow: rgba(92, 207, 230, 0.25);
+  --sheet-bg: rgba(24, 32, 40, 0.88);
+}
+
+[data-palette="midnight"] {
+  --bg: #f5f5f7;
+  --bg-glow-1: rgba(0, 0, 0, 0);
+  --bg-glow-2: rgba(0, 0, 0, 0);
+  --surface: #ffffff;
+  --surface-2: #f2f2f5;
+  --border: #e5e5ea;
+  --text: #1d1d1f;
+  --muted: #6e6e73;
+  --accent: #7d3cc8;
+  --accent-2: #9a3fb8;
+  --accent-soft: rgba(125, 60, 200, 0.1);
+  --red: #d70015;
+  --red-soft: #fff0f1;
+  --red-border: #f5c2c6;
+  --green: #1e7d38;
+  --green-2: #1e7d38;
+  --green-soft: #e6f4ea;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 10px 28px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.18);
+  --on-accent: #ffffff;
+  --on-green: #ffffff;
+  --accent-shadow: rgba(125, 60, 200, 0.25);
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", "Segoe UI", Roboto, sans-serif;
+}
+
+[data-palette="midnight"][data-theme="dark"] {
+  --bg: #000000;
+  --bg-glow-1: rgba(0, 0, 0, 0);
+  --bg-glow-2: rgba(0, 0, 0, 0);
+  --surface: #141416;
+  --surface-2: #1f1f22;
+  --border: #2a2a2e;
+  --text: #ffffff;
+  --muted: #9a9aa2;
+  --accent: #c58bff;
+  --accent-2: #e08cf0;
+  --accent-soft: rgba(197, 139, 255, 0.14);
+  --red: #ff453a;
+  --red-soft: rgba(255, 69, 58, 0.14);
+  --red-border: rgba(255, 69, 58, 0.4);
+  --green: #30d158;
+  --green-2: #30d158;
+  --green-soft: rgba(48, 209, 88, 0.14);
+  --shadow: none;
+  --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.7);
+  --on-accent: #1f0533;
+  --on-green: #03230e;
+  --accent-shadow: rgba(0, 0, 0, 0);
+}
+
+/* Glass: sheets, dialogs and the name suggestions are frosted, since its cards are see-through.
+   Blur costs only while one of them is open. */
+:root[data-palette="glass"] :is(.sheet, .dialog, .suggest) {
+  background: var(--sheet-bg);
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  backdrop-filter: blur(24px) saturate(160%);
+}
+/* Glass and Midnight: capsule buttons and rounder cards */
+:root:is([data-palette="glass"], [data-palette="midnight"]) :is(.primary, .ghost, .attendant-btn, .small-btn) { border-radius: 999px; }
+:root:is([data-palette="glass"], [data-palette="midnight"]) :is(.progress-card, .dose, .empty, .install-card, .tabs, .screen .field) { border-radius: 24px; }
+:root:is([data-palette="glass"], [data-palette="midnight"]) .tab { border-radius: 20px; }
+:root:is([data-palette="glass"], [data-palette="midnight"]) .dose-toggle { border-radius: 16px; }
+
 /* ---------- Base ---------- */
 * { box-sizing: border-box; }
 
 body {
   margin: 0;
   min-height: 100vh;
-  font-family: "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font); /* High Contrast swaps it for a font made for low vision */
   /* The glow scrolls with the page: pinning it (background-attachment: fixed) made phones
      repaint the whole screen on every scroll frame */
   background:
@@ -204,6 +687,7 @@ body.locked > .fab { display: none; }
 /* Doubled classes: .brand-icon and .primary are defined further down and would win otherwise */
 .brand-icon.attendant-icon,
 .primary.attendant-primary {
+  color: #fff; /* on red, whatever the theme's --on-accent */
   background: linear-gradient(135deg, var(--red), color-mix(in srgb, var(--red) 65%, var(--accent)));
   box-shadow: 0 8px 20px rgba(229, 72, 77, 0.3);
 }
@@ -236,9 +720,9 @@ body.locked > .fab { display: none; }
   border-radius: 13px;
   display: grid;
   place-items: center;
-  color: #fff;
+  color: var(--on-accent);
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
-  box-shadow: 0 6px 16px rgba(91, 95, 240, 0.35);
+  box-shadow: 0 6px 16px var(--accent-shadow);
 }
 .brand-text { min-width: 0; }
 .brand h1 {
@@ -306,15 +790,16 @@ body.locked > .fab { display: none; }
   border-radius: 14px;
   border: none;
   cursor: pointer;
-  color: #fff;
+  color: var(--on-accent);
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
-  box-shadow: 0 6px 16px rgba(91, 95, 240, 0.3);
+  box-shadow: 0 6px 16px var(--accent-shadow);
   transition: transform 0.15s;
 }
 .days-left:active { transform: scale(0.95); }
 #days-left-number { font-size: 1.35rem; font-weight: 800; line-height: 1.1; }
 .days-left-label { font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; opacity: 0.9; }
 .days-left.low {
+  color: #fff;
   background: linear-gradient(135deg, #f04452, #ff8a4c);
   box-shadow: 0 6px 16px rgba(240, 68, 82, 0.35);
 }
@@ -382,10 +867,10 @@ body.locked > .fab { display: none; }
 }
 .tab.active {
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
-  color: #fff;
-  box-shadow: 0 4px 12px rgba(91, 95, 240, 0.3);
+  color: var(--on-accent);
+  box-shadow: 0 4px 12px var(--accent-shadow);
 }
-.tab.active .tab-count { background: rgba(255, 255, 255, 0.22); color: #fff; }
+.tab.active .tab-count { background: color-mix(in srgb, var(--on-accent) 22%, transparent); color: var(--on-accent); }
 
 /* ---------- Folder bar (shown while a folder is open) ---------- */
 .folder-bar {
@@ -561,7 +1046,7 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
   margin-bottom: 14px;
   border-radius: 16px;
   font-weight: 700;
-  color: #fff;
+  color: var(--on-green);
   background: linear-gradient(135deg, var(--green), var(--green-2));
   box-shadow: 0 8px 22px rgba(34, 163, 90, 0.3);
 }
@@ -573,7 +1058,7 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
   display: grid;
   place-items: center;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.25);
+  background: color-mix(in srgb, var(--on-green) 25%, transparent);
 }
 @keyframes pop { from { transform: scale(0.9); opacity: 0; } }
 
@@ -678,10 +1163,10 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
 .dose-toggle.taken {
   border-color: transparent;
   background: linear-gradient(135deg, var(--green), var(--green-2));
-  color: #fff;
+  color: var(--on-green);
 }
-.dose-toggle.taken .dose-num { background: rgba(255, 255, 255, 0.25); }
-.dose-toggle.taken .dose-title { color: #fff; }
+.dose-toggle.taken .dose-num { background: color-mix(in srgb, var(--on-green) 25%, transparent); color: var(--on-green); }
+.dose-toggle.taken .dose-title { color: var(--on-green); }
 .dose-toggle.bump .dose-num { animation: pop 0.25s cubic-bezier(0.2, 0.8, 0.2, 1.4); }
 /* The check draws itself in on the dose that was just ticked */
 .dose-toggle.bump .check-path { stroke-dasharray: 22; stroke-dashoffset: 22; animation: draw 0.25s 0.05s ease-out forwards; }
@@ -797,10 +1282,10 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
   border: none;
   border-radius: 14px;
   font-weight: 700;
-  color: #fff;
+  color: var(--on-accent);
   cursor: pointer;
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
-  box-shadow: 0 8px 20px rgba(91, 95, 240, 0.3);
+  box-shadow: 0 8px 20px var(--accent-shadow);
 }
 
 /* ---------- Add medicine (+ button and screen) ---------- */
@@ -815,10 +1300,10 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
   place-items: center;
   border: none;
   border-radius: 20px;
-  color: #fff;
+  color: var(--on-accent);
   cursor: pointer;
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
-  box-shadow: 0 10px 26px rgba(91, 95, 240, 0.45);
+  box-shadow: 0 10px 26px var(--accent-shadow);
   transition: transform 0.15s;
 }
 .fab:active { transform: scale(0.92); }
@@ -1109,14 +1594,14 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
 }
 /* "Meds" (all medicines) gets the brand gradient so it reads as the main folder */
 .row-icon.main {
-  color: #fff;
+  color: var(--on-accent);
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
-  box-shadow: 0 4px 12px rgba(91, 95, 240, 0.28);
+  box-shadow: 0 4px 12px var(--accent-shadow);
 }
 .row-text { display: flex; flex-direction: column; min-width: 0; }
 .row-title, .row-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-title { font-weight: 700; }
-.row-meta { color: var(--muted); font-size: 0.78rem; font-weight: 600; }
+.row-meta { color: color-mix(in srgb, var(--muted) 80%, var(--text)); font-size: 0.78rem; font-weight: 600; } /* plain muted is too faint on surface-2 */
 .row.active .row-meta { color: color-mix(in srgb, var(--muted) 80%, var(--text)); }
 .row-btn {
   position: relative;
@@ -1204,6 +1689,58 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
   font-size: 0.78rem;
 }
 .pick-where:empty { display: none; }
+
+/* ---------- Settings and Theme screens ---------- */
+/* Sign out sits at the bottom of Settings, however little is above it */
+.settings-inner { min-height: 100%; grid-template-rows: auto auto 1fr; }
+.settings-account { align-self: end; }
+.row-chevron { flex-shrink: 0; margin-left: auto; display: grid; color: var(--muted); }
+/* A list card's own heading and hint line up with the fields above it */
+.list-card > .field-label { margin: 0; padding: 0 4px; }
+.list-card > .field-hint { padding: 0 4px; }
+
+/* Dark or light, on the Theme screen (the moon/sun button in the header does the same) */
+.mode-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin-top: 4px;
+  padding: 4px;
+  border-radius: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.mode-switch button {
+  min-height: 44px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: color-mix(in srgb, var(--muted) 80%, var(--text)); /* plain muted is too faint on surface-2 */
+  font-weight: 700;
+  cursor: pointer;
+}
+.mode-switch button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+
+/* Each theme's light and dark halves, coloured by that theme (data-palette on each half) */
+.theme-swatch {
+  flex-shrink: 0;
+  display: flex;
+  width: 44px;
+  height: 44px;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+}
+.theme-swatch span { flex: 1; display: grid; place-items: center; background: var(--bg); }
+.theme-swatch span::after {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+}
+.theme-check { flex-shrink: 0; margin-left: auto; display: grid; color: var(--accent); visibility: hidden; }
+.row-main[aria-pressed="true"] .theme-check { visibility: visible; }
 
 /* ---------- Notes sheet ---------- */
 /* Bottom sheet on phones, floating card on wider screens */
@@ -1338,9 +1875,9 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
   display: grid;
   place-items: center;
   border-radius: 14px;
-  color: #fff;
+  color: var(--on-accent);
   background: linear-gradient(135deg, var(--accent), var(--accent-2));
-  box-shadow: 0 6px 14px rgba(91, 95, 240, 0.28);
+  box-shadow: 0 6px 14px var(--accent-shadow);
 }
 .stat-text { display: flex; flex-direction: column; min-width: 0; }
 .stat-label {
@@ -1407,6 +1944,7 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
 .toast-action:active { transform: scale(0.95); }
 /* Destructive confirm (Discard): the app's red, like the Attendant button */
 .primary.danger {
+  color: #fff;
   background: linear-gradient(135deg, color-mix(in srgb, var(--red) 85%, #000), color-mix(in srgb, var(--red) 65%, var(--accent)));
   box-shadow: 0 8px 20px rgba(229, 72, 77, 0.3);
 }

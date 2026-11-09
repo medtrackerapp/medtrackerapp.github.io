@@ -354,8 +354,31 @@ test("the app offers to install itself; Not now puts the card away, Info keeps t
   await expect(page.locator("#progress-title")).toHaveText("Install Med", { timeout: 20000 });
   await offer();
   await expect(page.locator("#install-card")).toBeHidden(); // Not now is remembered
-  await page.locator("#info-btn").click();
+  await page.locator("#settings-btn").click();
+  await page.locator("#info-open").click();
   await expect(page.locator("#install-btn")).toBeVisible();
+});
+
+// ---------- Settings ----------
+test("Settings shows the account, keeps the phone's theme, and signs out from the bottom", async ({ page }) => {
+  watch(page);
+  await signInGuest(page, "Settings Nurse");
+  await page.locator("#settings-btn").click();
+  await expect(page.locator("#settings-account")).toHaveText("Settings Nurse · Guest");
+  await expect(page.locator("#theme-current")).toHaveText("Indigo · Dark");
+
+  await page.locator("#theme-open").click();
+  await page.getByRole("button", { name: /^Night Shift/ }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-palette", "night-shift");
+  await page.locator("#themes-back").click();
+  await expect(page.locator("#themes-screen")).toBeHidden();
+  await expect(page.locator("#settings-screen")).toBeVisible(); // Back closes only the Theme screen
+  await expect(page.locator("#theme-current")).toHaveText("Night Shift · Dark");
+
+  await page.locator("#signout-btn").click();
+  await expect(page.locator("#welcome-card")).toBeVisible({ timeout: 20000 });
+  await expect(page.locator("#settings-screen")).toBeHidden();
+  await expect(page.locator("html")).toHaveAttribute("data-palette", "night-shift"); // the theme belongs to the phone
 });
 
 // ---------- Undo and confirm ----------

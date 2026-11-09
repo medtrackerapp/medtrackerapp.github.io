@@ -17,16 +17,27 @@
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%235b5ff0'/%3E%3Cstop offset='1' stop-color='%2314b8a6'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='24' height='24' rx='6' fill='url(%23g)'/%3E%3Cg fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' transform='translate(3 3) scale(.75)'%3E%3Cpath d='M10.5 20.5 3.5 13.5a4.95 4.95 0 1 1 7-7l7 7a4.95 4.95 0 1 1-7 7Z'/%3E%3Cpath d='m8.5 8.5 7 7'/%3E%3C/g%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <!-- Atkinson Hyperlegible is for the High Contrast theme, Inter for the iPhone-style themes on
+       phones without Apple's font. Browsers only download a font that's in use. -->
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Atkinson+Hyperlegible:wght@400;700&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <!-- ?v=dev is replaced with the commit hash at deploy time, so an update never mixes old and new files -->
   <link rel="stylesheet" href="style.css?v=dev" />
   <script>
     // Dark by default, whatever the phone's setting; light only if chosen with the moon/sun button.
-    // Set before the page paints, so there's no flash.
+    // The colour theme (Settings > Theme) is per phone too. Both are set before the page paints, so
+    // there's no flash.
     let theme = "dark";
-    try { theme = localStorage.getItem("medicineTracker:theme") || theme; } catch {}
+    let palette = null;
+    try {
+      theme = localStorage.getItem("medicineTracker:theme") || theme;
+      palette = localStorage.getItem("medicineTracker:palette");
+    } catch {}
     document.documentElement.dataset.theme = theme;
-    if (theme === "light") document.querySelector('meta[name="theme-color"]').content = "#f3f5fb";
+    if (palette && palette !== "indigo") document.documentElement.dataset.palette = palette;
+    // The browser bar takes the page background. style.css has loaded by now (a script waits for
+    // the stylesheets above it), so --bg is the chosen theme's.
+    const pageBg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+    if (pageBg) document.querySelector('meta[name="theme-color"]').content = pageBg;
     // Signed in last time: while the app loads, show the tracker's outline instead of a spinner
     try { if (localStorage.getItem("medicineTracker:signedIn")) document.documentElement.classList.add("returning"); } catch {}
 
@@ -151,8 +162,9 @@
         <span id="days-left-number">–</span>
         <span id="days-left-label" class="days-left-label">days left</span>
       </button>
-      <button id="info-btn" class="icon-btn" title="About" aria-label="About">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+      <!-- Settings: theme, info, account and sign out -->
+      <button id="settings-btn" class="icon-btn" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>
       </button>
     </div>
   </header>
@@ -327,7 +339,75 @@
     </form>
   </div>
 
-  <!-- Info screen: about the app, creator, signed-in account -->
+  <!-- Settings screen (gear button): Theme and Info open their own screens; Sign out at the bottom -->
+  <div id="settings-screen" class="screen hidden" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div class="screen-inner settings-inner">
+      <header class="screen-header">
+        <button type="button" id="settings-back" class="icon-btn" title="Back" aria-label="Back">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        </button>
+        <h2 id="settings-title">Settings</h2>
+      </header>
+
+      <section class="field list-card">
+        <div class="row-list">
+          <div class="row">
+            <button type="button" id="theme-open" class="row-main">
+              <span class="row-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 0 0 0 20c1 0 1.6-.7 1.6-1.6 0-.5-.2-.9-.5-1.2-.3-.3-.4-.7-.4-1.1 0-.9.7-1.7 1.7-1.7h2a5.6 5.6 0 0 0 5.6-5.6C22 6 17.5 2 12 2Z"/><circle cx="7.5" cy="11.5" r="1.2"/><circle cx="10.5" cy="7" r="1.2"/><circle cx="15.5" cy="7.5" r="1.2"/></svg>
+              </span>
+              <span class="row-text"><span class="row-title">Theme</span><span id="theme-current" class="row-meta"></span></span>
+              <span class="row-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg></span>
+            </button>
+          </div>
+          <div class="row">
+            <button type="button" id="info-open" class="row-main">
+              <span class="row-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+              </span>
+              <span class="row-text"><span class="row-title">Info</span><span class="row-meta">About the app, patient ID, install</span></span>
+              <span class="row-chevron" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 6 6 6-6 6"/></svg></span>
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section class="field settings-account">
+        <span class="field-label">Signed in as</span>
+        <p id="settings-account" class="info-text"></p>
+        <button id="signout-btn" type="button" class="ghost">Sign out</button>
+      </section>
+    </div>
+  </div>
+
+  <!-- Theme screen (Settings > Theme): dark or light, and the colour theme. Saved on this phone only. -->
+  <div id="themes-screen" class="screen hidden" role="dialog" aria-modal="true" aria-labelledby="themes-title">
+    <div class="screen-inner">
+      <header class="screen-header">
+        <button type="button" id="themes-back" class="icon-btn" title="Back" aria-label="Back">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg>
+        </button>
+        <h2 id="themes-title">Theme</h2>
+      </header>
+
+      <section class="field">
+        <span id="mode-label" class="field-label">Dark or light</span>
+        <div id="mode-switch" class="mode-switch" role="group" aria-labelledby="mode-label">
+          <button type="button" data-mode="dark" aria-pressed="false">Dark</button>
+          <button type="button" data-mode="light" aria-pressed="false">Light</button>
+        </div>
+      </section>
+
+      <section class="field list-card">
+        <h3 id="palette-label" class="field-label">Colours</h3>
+        <p class="field-hint">Changes this phone only. Other nurses keep their own.</p>
+        <!-- One row per theme, drawn by app.js ("Look") -->
+        <div id="theme-list" class="row-list" role="group" aria-labelledby="palette-label"></div>
+      </section>
+    </div>
+  </div>
+
+  <!-- Info screen (Settings > Info): about the app, creator, patient ID, install -->
   <div id="info-screen" class="screen hidden" role="dialog" aria-modal="true" aria-labelledby="info-title">
     <div class="screen-inner">
       <header class="screen-header">
@@ -365,12 +445,6 @@
         <span class="field-label">Install app</span>
         <p id="install-text" class="info-text"></p>
         <button id="install-btn" type="button" class="primary hidden">Install app</button>
-      </section>
-
-      <section class="field">
-        <span class="field-label">Signed in as</span>
-        <p id="info-account" class="info-text"></p>
-        <button id="signout-btn" type="button" class="ghost">Sign out</button>
       </section>
     </div>
   </div>

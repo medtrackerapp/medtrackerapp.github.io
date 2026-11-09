@@ -275,6 +275,95 @@ test.describe("medicine name suggestions", () => {
   }
 });
 
+// ---------- Settings and Theme ----------
+// Behind sign-in too; opened the same way as the add screen (nothing is saved to the database).
+test.describe("settings and theme", () => {
+  const PALETTES = ["indigo", "scrubs", "night-shift", "rx-pad", "graphite", "jamun", "high-contrast", "clarity", "glass", "midnight"];
+  const barColour = (page) => page.locator('meta[name="theme-color"]');
+  const openSettings = (page) => page.evaluate(() => {
+    document.body.classList.remove("locked");
+    document.getElementById("settings-btn").click();
+  });
+
+  test("Settings has Theme and Info, with Sign out at the bottom", async ({ page }) => {
+    await openSettings(page);
+    await expect(page.locator("#settings-screen")).toBeVisible();
+    await expect(page.locator("#theme-current")).toHaveText("Indigo · Dark");
+    const signOut = await page.locator("#signout-btn").boundingBox();
+    expect(page.viewportSize().height - (signOut.y + signOut.height)).toBeLessThan(60);
+
+    await page.locator("#info-open").click();
+    await expect(page.locator("#info-screen")).toBeVisible();
+    await page.evaluate(() => history.back()); // the phone's Back closes only the top screen
+    await expect(page.locator("#info-screen")).toBeHidden();
+    await expect(page.locator("#settings-screen")).toBeVisible();
+  });
+
+  test("Theme lists every theme; the pick colours the page and the browser bar, and is kept", async ({ page }) => {
+    await openSettings(page);
+    await page.locator("#theme-open").click();
+    await expect(page.locator("#theme-list .row-title"))
+      .toHaveText(["Indigo", "Scrubs", "Night Shift", "Rx Pad", "Graphite", "Jamun", "High Contrast", "Clarity", "Glass", "Midnight"]);
+    await expect(page.getByRole("button", { name: /^Indigo/ })).toHaveAttribute("aria-pressed", "true");
+    await expect(barColour(page)).toHaveAttribute("content", "#0d1020");
+
+    await page.getByRole("button", { name: /^Scrubs/ }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-palette", "scrubs");
+    await expect(page.getByRole("button", { name: /^Scrubs/ })).toHaveAttribute("aria-pressed", "true");
+    await expect(barColour(page)).toHaveAttribute("content", "#08151d");
+    await page.locator("#mode-switch").getByRole("button", { name: "Light" }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await expect(barColour(page)).toHaveAttribute("content", "#edf3f6");
+
+    // Applied before the page paints next time
+    await page.reload();
+    await expect(page.locator("html")).toHaveAttribute("data-palette", "scrubs");
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+    await expect(barColour(page)).toHaveAttribute("content", "#edf3f6");
+
+    // Indigo is the default again, with no data-palette at all
+    await openSettings(page);
+    await page.locator("#theme-open").click();
+    await page.getByRole("button", { name: /^Indigo/ }).click();
+    expect(await page.evaluate(() => document.documentElement.hasAttribute("data-palette"))).toBe(false);
+    await expect(barColour(page)).toHaveAttribute("content", "#f3f5fb");
+  });
+
+  for (const mode of ["dark", "light"]) {
+    test(`accessibility (WCAG 2.1 AA): Settings, ${mode}`, async ({ page }) => {
+      await useTheme(page, mode);
+      await openSettings(page);
+      await settle(page);
+      const results = await new AxeBuilder({ page }).include("#settings-screen")
+        .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"]).analyze();
+      expect(results.violations.map((v) => `${v.id}: ${v.help} (${v.nodes.map((n) => n.target).join(", ")})`)).toEqual([]);
+    });
+  }
+
+  // Every theme in both modes: the welcome screen, then the Theme screen
+  for (const palette of PALETTES) {
+    for (const mode of ["dark", "light"]) {
+      test(`accessibility (WCAG 2.1 AA): ${palette} theme, ${mode}`, async ({ page }) => {
+        await page.evaluate(([p, m]) => {
+          localStorage.setItem("medicineTracker:palette", p);
+          localStorage.setItem("medicineTracker:theme", m);
+        }, [palette, mode]);
+        await page.reload();
+        await expect(page.locator("#welcome")).toBeVisible({ timeout: 15000 });
+        await settle(page);
+        const tags = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];
+        const list = (r) => r.violations.map((v) => `${v.id}: ${v.help} (${v.nodes.map((n) => n.target).join(", ")})`);
+        expect(list(await new AxeBuilder({ page }).withTags(tags).analyze()), "welcome screen").toEqual([]);
+
+        await openSettings(page);
+        await page.locator("#theme-open").click();
+        await settle(page);
+        expect(list(await new AxeBuilder({ page }).include("#themes-screen").withTags(tags).analyze()), "Theme screen").toEqual([]);
+      });
+    }
+  }
+});
+
 // ---------- Add medicine form ----------
 test.describe("add medicine form", () => {
   test.beforeEach(async ({ page }) => {

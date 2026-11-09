@@ -495,11 +495,20 @@ const els = {
   infoPid: document.getElementById("info-pid"),
   infoExpiryBox: document.getElementById("info-expiry-box"),
   infoExpiry: document.getElementById("info-expiry"),
-  infoBtn: document.getElementById("info-btn"),
   infoScreen: document.getElementById("info-screen"),
   infoBack: document.getElementById("info-back"),
-  infoAccount: document.getElementById("info-account"),
+  infoOpen: document.getElementById("info-open"),
+  settingsBtn: document.getElementById("settings-btn"),
+  settingsScreen: document.getElementById("settings-screen"),
+  settingsBack: document.getElementById("settings-back"),
+  settingsAccount: document.getElementById("settings-account"),
   signoutBtn: document.getElementById("signout-btn"),
+  themeOpen: document.getElementById("theme-open"),
+  themeCurrent: document.getElementById("theme-current"),
+  themesScreen: document.getElementById("themes-screen"),
+  themesBack: document.getElementById("themes-back"),
+  themeList: document.getElementById("theme-list"),
+  modeSwitch: document.getElementById("mode-switch"),
   patientName: document.getElementById("patient-name"),
   daysLeftBtn: document.getElementById("days-left"),
   daysLeftNum: document.getElementById("days-left-number"),
@@ -937,17 +946,92 @@ function render() {
   justToggled = null;
 }
 
-// ---------- Dark mode ----------
+// ---------- Look: dark or light, and the colour theme ----------
+// Both are saved on this phone only (each nurse picks their own) and applied before the page
+// paints by the script in index.html. The colours live in style.css ([data-palette] blocks).
 const THEME_KEY = "medicineTracker:theme";
+const PALETTE_KEY = "medicineTracker:palette";
+const PALETTES = [
+  { id: "indigo", name: "Indigo", tag: "The original look" },
+  { id: "scrubs", name: "Scrubs", tag: "Calm, clinical" },
+  { id: "night-shift", name: "Night Shift", tag: "Easy on tired eyes" },
+  { id: "rx-pad", name: "Rx Pad", tag: "Paper and ink" },
+  { id: "graphite", name: "Graphite", tag: "Flat and plain" },
+  { id: "jamun", name: "Jamun", tag: "Warm and personal" },
+  { id: "high-contrast", name: "High Contrast", tag: "Easiest to read" },
+  // Designs V2 (iPhone style): colours, system font and shape; the layout stays the same
+  { id: "clarity", name: "Clarity", tag: "iPhone style · classic blue" },
+  { id: "glass", name: "Glass", tag: "iPhone style · frosted glass" },
+  { id: "midnight", name: "Midnight", tag: "iPhone style · true black" },
+];
+const CHECK_SMALL = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="3"
+  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>`;
 
-els.themeBtn.addEventListener("click", () => {
-  const current = document.documentElement.dataset.theme
+function currentMode() {
+  return document.documentElement.dataset.theme
     ?? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
-  const next = current === "dark" ? "light" : "dark";
-  document.documentElement.dataset.theme = next;
-  // Phone browser bar follows the page background (--bg in style.css)
-  document.querySelector('meta[name="theme-color"]').content = next === "dark" ? "#0d1020" : "#f3f5fb";
-  try { localStorage.setItem(THEME_KEY, next); } catch {}
+}
+
+function currentPalette() {
+  const id = document.documentElement.dataset.palette;
+  return PALETTES.find((p) => p.id === id) ?? PALETTES[0];
+}
+
+// Phone browser bar follows the page background (--bg in style.css)
+function syncBrowserBar() {
+  const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+  if (bg) document.querySelector('meta[name="theme-color"]').content = bg;
+}
+
+function setMode(mode) {
+  document.documentElement.dataset.theme = mode;
+  try { localStorage.setItem(THEME_KEY, mode); } catch {}
+  syncBrowserBar();
+  renderLook();
+}
+
+function setPalette(id) {
+  if (id === "indigo") delete document.documentElement.dataset.palette;
+  else document.documentElement.dataset.palette = id;
+  try { localStorage.setItem(PALETTE_KEY, id); } catch {}
+  syncBrowserBar();
+  renderLook();
+}
+
+// The Theme screen's rows and switch, and the Theme row's summary on Settings
+function renderLook() {
+  const palette = currentPalette();
+  const mode = currentMode();
+  if (!els.themeList.children.length) {
+    els.themeList.replaceChildren(...PALETTES.map((p) => {
+      const row = document.createElement("div");
+      row.className = "row";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "row-main";
+      btn.dataset.id = p.id;
+      // Each half carries the theme itself, so style.css colours it (see "Colour themes")
+      btn.innerHTML = `<span class="theme-swatch" aria-hidden="true"><span data-palette="${p.id}" data-theme="light"></span><span data-palette="${p.id}" data-theme="dark"></span></span>
+        <span class="row-text"><span class="row-title">${p.name}</span><span class="row-meta">${p.tag}</span></span>
+        <span class="theme-check">${CHECK_SMALL}</span>`;
+      btn.addEventListener("click", () => setPalette(p.id));
+      row.append(btn);
+      return row;
+    }));
+  }
+  for (const btn of els.themeList.querySelectorAll(".row-main")) {
+    const on = btn.dataset.id === palette.id;
+    btn.setAttribute("aria-pressed", on);
+    btn.parentElement.classList.toggle("active", on);
+  }
+  for (const btn of els.modeSwitch.querySelectorAll("button")) btn.setAttribute("aria-pressed", btn.dataset.mode === mode);
+  els.themeCurrent.textContent = `${palette.name} · ${mode === "dark" ? "Dark" : "Light"}`;
+}
+
+els.themeBtn.addEventListener("click", () => setMode(currentMode() === "dark" ? "light" : "dark"));
+els.modeSwitch.addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-mode]");
+  if (btn) setMode(btn.dataset.mode);
 });
 
 // ---------- Sign-in (Google) ----------
@@ -1412,34 +1496,50 @@ document.querySelectorAll(".stepper").forEach((stepper) => {
   );
 });
 
-// ---------- Full screens (add medicine, info) ----------
-// Each screen gets its own history entry, so the phone's back button closes it.
+// ---------- Full screens (add medicine, settings, theme, info, medicines) ----------
+// Each screen gets its own history entry, so the phone's back button closes it. Screens can open
+// over each other (Settings > Theme), so Back closes only the top one.
 if (history.state?.screen) history.replaceState(null, "");
+const openScreens = []; // top last
 
 function openScreen(el) {
   el.classList.remove("hidden", "closing");
+  openScreens.push(el);
   history.pushState({ screen: true }, "");
 }
 
 function closeScreen(el) {
-  if (history.state?.screen) history.back(); // popstate hides the screen
-  else el.classList.add("hidden");
+  if (history.state?.screen && openScreens.at(-1) === el) return history.back(); // popstate hides it
+  const i = openScreens.indexOf(el);
+  if (i >= 0) openScreens.splice(i, 1);
+  el.classList.add("hidden");
 }
 
 window.addEventListener("popstate", () => {
-  for (const el of [els.addScreen, els.infoScreen, els.medsScreen]) {
-    if (el.classList.contains("hidden")) continue;
-    el.classList.add("closing"); // slides out (style.css), then hides
-    setTimeout(() => el.classList.add("hidden"), calm() ? 0 : 180);
-  }
+  const el = openScreens.pop();
+  if (!el || el.classList.contains("hidden")) return;
+  el.classList.add("closing"); // slides out (style.css), then hides
+  setTimeout(() => el.classList.add("hidden"), calm() ? 0 : 180);
 });
 
-// ---------- Info ----------
-els.infoBtn.addEventListener("click", () => {
-  els.infoAccount.textContent = user
+// ---------- Settings (theme, info, sign out) ----------
+els.settingsBtn.addEventListener("click", () => {
+  els.settingsAccount.textContent = user
     ? (user.isAnonymous && !user.displayName ? "Attendant"
       : [user.displayName, user.isAnonymous ? "Guest" : user.email].filter(Boolean).join(" · "))
     : "";
+  renderLook();
+  openScreen(els.settingsScreen);
+});
+els.settingsBack.addEventListener("click", () => closeScreen(els.settingsScreen));
+
+els.themeOpen.addEventListener("click", () => {
+  renderLook();
+  openScreen(els.themesScreen);
+});
+els.themesBack.addEventListener("click", () => closeScreen(els.themesScreen));
+
+els.infoOpen.addEventListener("click", () => {
   els.infoPid.textContent = shared?.patient?.pid ?? (draft ? "Given when you add the first medicine" : "Not assigned yet");
   const expires = shared?.expireAt?.toDate?.();
   els.infoExpiryBox.classList.toggle("hidden", !expires);
@@ -1452,7 +1552,7 @@ els.infoBtn.addEventListener("click", () => {
 els.infoBack.addEventListener("click", () => closeScreen(els.infoScreen));
 
 els.signoutBtn.addEventListener("click", () => {
-  els.infoScreen.classList.add("hidden");
+  for (const el of openScreens.splice(0)) el.classList.add("hidden");
   // Drop the patient from the URL so the next account on this phone opens its own tracker.
   history.replaceState(null, "", location.pathname);
   signOut(auth).catch(reportError);
