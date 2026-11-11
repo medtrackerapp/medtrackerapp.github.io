@@ -968,8 +968,8 @@ const CHECK_SMALL = `<svg viewBox="0 0 24 24" width="20" height="20" fill="none"
   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>`;
 
 function currentMode() {
-  return document.documentElement.dataset.theme
-    ?? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  // index.html sets data-theme before the page paints, so it's always there; dark is the default
+  return document.documentElement.dataset.theme ?? "dark";
 }
 
 function currentPalette() {
@@ -1006,11 +1006,13 @@ function renderLook() {
     els.themeList.replaceChildren(...PALETTES.map((p) => {
       const row = document.createElement("div");
       row.className = "row";
+      // The row carries the theme itself, so style.css draws it in that theme's colours and font:
+      // a live preview. The swatch halves do the same for whichever mode the row isn't showing.
+      row.dataset.palette = p.id;
       const btn = document.createElement("button");
       btn.type = "button";
       btn.className = "row-main";
       btn.dataset.id = p.id;
-      // Each half carries the theme itself, so style.css colours it (see "Colour themes")
       btn.innerHTML = `<span class="theme-swatch" aria-hidden="true"><span data-palette="${p.id}" data-theme="light"></span><span data-palette="${p.id}" data-theme="dark"></span></span>
         <span class="row-text"><span class="row-title">${p.name}</span><span class="row-meta">${p.tag}</span></span>
         <span class="theme-check">${CHECK_SMALL}</span>`;
@@ -1023,6 +1025,7 @@ function renderLook() {
     const on = btn.dataset.id === palette.id;
     btn.setAttribute("aria-pressed", on);
     btn.parentElement.classList.toggle("active", on);
+    btn.parentElement.dataset.theme = mode; // the previews follow the Dark / Light switch
   }
   for (const btn of els.modeSwitch.querySelectorAll("button")) btn.setAttribute("aria-pressed", btn.dataset.mode === mode);
   els.themeCurrent.textContent = `${palette.name} · ${mode === "dark" ? "Dark" : "Light"}`;

@@ -1,5 +1,7 @@
 /* ---------- Theme tokens ---------- */
-/* Indigo, the default colour theme. [data-palette="indigo"] lets the Theme screen draw its swatch. */
+/* Indigo, the default colour theme. [data-palette="indigo"] lets the Theme screen draw its swatch.
+   2026-11-11: accents nudged darker in light mode and on-accent/on-green made dark ink in dark
+   mode, so text on the gradients reads at WCAG AA (it was 1.9-2.5:1 on the old teal). */
 :root,
 [data-palette="indigo"] {
   --bg: #f3f5fb;
@@ -9,51 +11,28 @@
   --surface-2: #f6f7fb;
   --border: #e4e7f0;
   --text: #151a2d;
-  --muted: #6b7290;
-  --accent: #5b5ff0;
-  --accent-2: #14b8a6;
-  --accent-soft: rgba(91, 95, 240, 0.1);
+  --muted: #676d8a;
+  --accent: #565ae4;
+  --accent-2: #0e8376;
+  --accent-soft: rgba(86, 90, 228, 0.1);
   --red: #e5484d;
   --red-soft: #fff0f0;
   --red-border: #f8c4c5;
-  --green: #22a35a;
-  --green-2: #14b8a6;
+  --green: #1c864a;
+  --green-2: #0e8376;
   --green-soft: #e8f8ef;
   --shadow: 0 1px 2px rgba(20, 26, 50, 0.04), 0 8px 24px rgba(20, 26, 50, 0.06);
   --shadow-lg: 0 20px 50px rgba(20, 26, 50, 0.18);
   /* Text and icons on the accent and green gradients, and the glow under accent buttons */
   --on-accent: #fff;
   --on-green: #fff;
-  --accent-shadow: rgba(91, 95, 240, 0.3);
+  --accent-shadow: rgba(86, 90, 228, 0.3);
   --font: "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color-scheme: light;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --bg: #0d1020;
-    --bg-glow-1: rgba(99, 102, 241, 0.22);
-    --bg-glow-2: rgba(20, 184, 166, 0.14);
-    --surface: #161a2e;
-    --surface-2: #1d2238;
-    --border: #2a3050;
-    --text: #e9ebf5;
-    --muted: #9198b8;
-    --accent: #8b8ff8;
-    --accent-2: #2dd4bf;
-    --accent-soft: rgba(139, 143, 248, 0.14);
-    --red: #ff6b70;
-    --red-soft: rgba(255, 107, 112, 0.1);
-    --red-border: rgba(255, 107, 112, 0.35);
-    --green: #34d399;
-    --green-2: #2dd4bf;
-    --green-soft: rgba(52, 211, 153, 0.12);
-    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
-    --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.5);
-    color-scheme: dark;
-  }
-}
-
+/* No prefers-color-scheme fallback: index.html sets data-theme before the first paint, always
+   (dark by default), so [data-theme] rules are the only ones that can ever apply. */
 :root[data-theme="dark"],
 [data-palette="indigo"][data-theme="dark"] {
   --bg: #0d1020;
@@ -75,6 +54,9 @@
   --green-soft: rgba(52, 211, 153, 0.12);
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.25);
   --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.5);
+  /* Dark ink on the bright gradients (white was 1.9:1 on the teal end) */
+  --on-accent: #0d1020;
+  --on-green: #0d1020;
   color-scheme: dark;
 }
 
@@ -772,14 +754,10 @@ body.locked > .fab { display: none; }
 .icon-btn:hover { color: var(--accent); }
 .icon-btn:active { transform: scale(0.94); }
 
-/* Show moon in light mode, sun in dark mode */
+/* Show moon in light mode, sun in dark mode (data-theme is always set, see the theme tokens) */
 .icon-sun { display: none; }
 :root[data-theme="dark"] .icon-sun { display: block; }
 :root[data-theme="dark"] .icon-moon { display: none; }
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .icon-sun { display: block; }
-  :root:not([data-theme="light"]) .icon-moon { display: none; }
-}
 
 .days-left {
   display: flex;
@@ -1720,6 +1698,16 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
   cursor: pointer;
 }
 .mode-switch button[aria-pressed="true"] { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+
+/* Each theme's row is drawn in that theme (data-palette + the current mode on the row): its
+   colours, its font, and its own page colour behind the surface, so a see-through theme (Glass)
+   still reads over any page. The ID selector outranks .row.active, hence the explicit override. */
+#theme-list .row {
+  font-family: var(--font);
+  color: var(--text);
+  background: linear-gradient(var(--surface-2), var(--surface-2)), var(--bg);
+}
+#theme-list .row.active { background: linear-gradient(var(--accent-soft), var(--accent-soft)), var(--bg); }
 
 /* Each theme's light and dark halves, coloured by that theme (data-palette on each half) */
 .theme-swatch {
