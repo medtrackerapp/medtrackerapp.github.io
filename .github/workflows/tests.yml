@@ -54,6 +54,11 @@ jobs:
       - run: npm ci
         working-directory: cleanup
 
+      # The push Worker: pure Node tests (crypto against the RFC vector, scheduling logic)
+      - name: Worker tests
+        run: npm test
+        working-directory: worker
+
       - name: Run all tests against the emulators
         run: npm run test:emulator
         working-directory: tests

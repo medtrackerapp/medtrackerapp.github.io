@@ -381,6 +381,42 @@ test("Settings shows the account, keeps the phone's theme, and signs out from th
   await expect(page.locator("html")).toHaveAttribute("data-palette", "night-shift"); // the theme belongs to the phone
 });
 
+// ---------- Push reminders ----------
+test("closed-app reminders: Turn on stores this phone's subscription, Turn off removes it", async ({ browser }) => {
+  const context = await browser.newContext({ permissions: ["notifications"] });
+  const page = watch(await context.newPage());
+  // A phone's push plumbing, minus the push service: subscribe() hands back a fixed subscription
+  await page.addInitScript(() => {
+    const sub = {
+      endpoint: "https://push.example/sub-1",
+      toJSON: () => ({ endpoint: "https://push.example/sub-1", keys: { p256dh: "pk", auth: "a" } }),
+    };
+    // The browser keeps a subscription across page loads; the stub does too
+    let current = localStorage.getItem("_sub") ? sub : null;
+    Object.defineProperty(ServiceWorkerRegistration.prototype, "pushManager", {
+      get: () => ({
+        getSubscription: async () => current,
+        subscribe: async () => (localStorage.setItem("_sub", "1"), (current = sub)),
+      }),
+    });
+  });
+  await signInGuest(page, "Push Nurse");
+  await addMedicine(page, "Push Med");
+  await page.locator("#settings-btn").click();
+  await expect(page.locator("#push-text")).toContainText("even when the app is closed");
+  await page.locator("#push-on").click();
+  await expect(page.locator("#push-text")).toContainText("On — this phone gets Push Nurse's");
+
+  await page.reload(); // the subscription lives on the patient doc, not just in this page
+  await expect(page.locator("#progress-title")).toHaveText("Push Med", { timeout: 20000 });
+  await page.locator("#settings-btn").click();
+  await expect(page.locator("#push-text")).toContainText("On — this phone gets");
+
+  await page.locator("#push-off").click();
+  await expect(page.locator("#push-text")).not.toContainText("On —");
+  await context.close();
+});
+
 // ---------- Undo and confirm ----------
 test("removing a medicine can be undone, and is gone for good otherwise", async ({ page }) => {
   watch(page);

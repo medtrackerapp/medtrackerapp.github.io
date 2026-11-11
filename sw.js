@@ -47,6 +47,35 @@ self.addEventListener("fetch", (event) => {
   }
 });
 
+// ---------- Dose reminders (sent by worker/ while the app is closed) ----------
+self.addEventListener("push", (event) => {
+  const data = event.data?.json() ?? {};
+  event.waitUntil((async () => {
+    // The open page shows this reminder itself (checkReminders); only skip when it's really on screen
+    const open = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    if (data.p && open.some((c) => c.visibilityState === "visible" && c.url.includes(data.p))) return;
+    await self.registration.showNotification(data.t ?? "Medicine Tracker", {
+      body: data.b ?? "",
+      tag: data.g ? `${data.p}_${data.g}` : undefined, // one notification per dose, not a pile
+      icon: "icons/icon-192.png",
+      badge: "icons/icon-192.png",
+      data: { url: data.p ? `./?patient=${data.p}` : "./" },
+    });
+  })());
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  event.waitUntil((async () => {
+    const url = new URL(event.notification.data?.url ?? "./", self.location.href).href;
+    const open = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    const win = open.find((c) => c.url === url) ?? open[0];
+    if (!win) return self.clients.openWindow(url);
+    await win.focus();
+    if (win.url !== url) await win.navigate(url).catch(() => {});
+  })());
+});
+
 // The app's files: from the cache (instant), else the network. On your computer the other way round.
 async function fromShell(key, req) {
   const cache = await caches.open(SHELL);

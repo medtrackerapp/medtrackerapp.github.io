@@ -383,7 +383,7 @@ function toggleDose(tab, i) {
 }
 
 function setReminder(key, time) {
-  updateDoc(patientRef, new FieldPath("reminders", key), time ?? deleteField())
+  updateDoc(patientRef, new FieldPath("reminders", key), time ?? deleteField(), ...pushStamp())
     .catch(reportError);
 }
 
@@ -398,6 +398,7 @@ function addMedicine({ name, everyDays, dosesPerDay, notes, totalDays }, folderI
     data.folders = { [folderId]: { meds: arrayUnion(id) } };
     shared.folders[folderId].meds = [...(shared.folders[folderId].meds ?? []), id]; // so the folder stays open
   }
+  if (pushStamp().length) data.pushChangedAt = serverTimestamp();
   setDoc(patientRef, data, { merge: true }).catch(reportError);
   return id;
 }
@@ -445,7 +446,7 @@ function updateTabField(tab, field, value) {
   const root = tab.custom ? "medicines" : "builtins";
   // Apply locally first so the change shows right away; the snapshot confirms it.
   ((shared[root] ??= {})[tab.id] ??= {})[field] = value;
-  updateDoc(patientRef, new FieldPath(root, tab.id, field), value).catch(reportError);
+  updateDoc(patientRef, new FieldPath(root, tab.id, field), value, ...pushStamp()).catch(reportError);
 }
 
 // Field/value pairs that delete this tab's reminders from dose index `from` onwards.
@@ -468,6 +469,7 @@ function removeMedicine(tab) {
       : [new FieldPath("builtins", id, "removed"), true]),
     new FieldPath("courses", id), deleteField(),
     ...reminderDeletes(id),
+    ...pushStamp(),
     // Take it out of the tab order and any folders too
     ...(shared.order?.includes(id) ? [new FieldPath("order"), arrayRemove(id)] : []),
     ...allFolders().filter((f) => f.meds.includes(id))
@@ -509,6 +511,11 @@ const els = {
   themesBack: document.getElementById("themes-back"),
   themeList: document.getElementById("theme-list"),
   modeSwitch: document.getElementById("mode-switch"),
+  pushText: document.getElementById("push-text"),
+  pushOn: document.getElementById("push-on"),
+  pushActions: document.getElementById("push-actions"),
+  pushTest: document.getElementById("push-test"),
+  pushOff: document.getElementById("push-off"),
   patientName: document.getElementById("patient-name"),
   daysLeftBtn: document.getElementById("days-left"),
   daysLeftNum: document.getElementById("days-left-number"),
@@ -835,6 +842,7 @@ function render() {
   if (scheduleTabId) renderSchedule();
   renderMeds();
   renderNextDose();
+  renderPush(); // the Settings screen may be open over the tracker
 
   const empty = !tab;
   els.empty.classList.toggle("hidden", !empty);
@@ -1533,6 +1541,7 @@ els.settingsBtn.addEventListener("click", () => {
     : "";
   renderLook();
   openScreen(els.settingsScreen);
+  renderPush();
 });
 els.settingsBack.addEventListener("click", () => closeScreen(els.settingsScreen));
 
@@ -2006,7 +2015,7 @@ els.scheduleEditBtn.addEventListener("click", () => {
   if (!tab) return;
   if (scheduleEditing) {
     const fields = scheduleChanges(tab);
-    if (fields.length) updateDoc(patientRef, ...fields).catch(reportError);
+    if (fields.length) updateDoc(patientRef, ...fields, ...pushStamp()).catch(reportError);
     scheduleEditing = false;
     renderSchedule();
   } else {
@@ -2628,6 +2637,92 @@ function checkReminders() {
     if (isTaken(tabId, Number(i))) continue;
     notify("Time for medicine 💊", `${ordinal(Number(i) + 1)} dose of ${tab.label}`);
   }
+}
+
+// ---------- Push reminders (arrive with the app closed; sent by worker/) ----------
+// Turning on saves this phone's push subscription on the patient doc (pushSubs). The Cloudflare
+// Worker mirrors reminder schedules — told what changed by pushChangedAt stamps — and pushes at
+// dose time unless a nurse already gave the dose. All of it per phone and per patient.
+const PUSH_PUBLIC_KEY = "BMT0v_1gKJCxGOoKQBlG77VHOu0kWfM_rE_RRp09fKJX64eK3RNZHkbRa7uwFYSjOF8WwC7wQbrzF92lt6b2lms";
+
+const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+
+async function currentPushSub() {
+  return (await navigator.serviceWorker.ready).pushManager.getSubscription();
+}
+
+// A subscription's key in pushSubs: its endpoint hashed down to a short, path-safe id
+async function subKeyOf(endpoint) {
+  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(endpoint));
+  return btoa(String.fromCharCode(...new Uint8Array(hash))).replaceAll("+", "-").replaceAll("/", "_").slice(0, 22);
+}
+
+// Appended to writes that change what or when to remind, so the Worker re-reads this patient
+function pushStamp() {
+  return Object.keys(shared?.pushSubs ?? {}).length ? [new FieldPath("pushChangedAt"), serverTimestamp()] : [];
+}
+
+async function renderPush() {
+  if (els.settingsScreen.classList.contains("hidden")) return;
+  const show = (text, state) => {
+    els.pushText.textContent = text;
+    els.pushOn.classList.toggle("hidden", state !== "off");
+    els.pushActions.classList.toggle("hidden", state !== "on");
+  };
+  if (!pushSupported()) {
+    return show(isApple && !installed()
+      ? "On iPhone, first install the app (Share → Add to Home Screen); reminders can then reach this phone."
+      : "This browser can't show reminders while the app is closed.", "none");
+  }
+  if (Notification.permission === "denied") {
+    return show("Notifications are blocked for this site. Allow them in the browser's settings, then come back here.", "none");
+  }
+  if (draft || !shared) return show("Add a medicine first — reminders start once the tracker is saved.", "none");
+  const sub = await currentPushSub();
+  const on = !!sub && !!shared.pushSubs?.[await subKeyOf(sub.endpoint)];
+  show(on
+    ? `On — this phone gets ${shared.patient.name}'s dose reminders even when the app is closed.`
+    : "Dose reminders on this phone even when the app is closed. Every dose with a reminder time counts.", on ? "on" : "off");
+}
+
+els.pushOn.addEventListener("click", async () => {
+  try {
+    if ((await Notification.requestPermission()) !== "granted") return renderPush();
+    const reg = await navigator.serviceWorker.ready;
+    const sub = (await reg.pushManager.getSubscription())
+      ?? await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: pushKeyBytes() });
+    const key = await subKeyOf(sub.endpoint);
+    const { keys } = sub.toJSON();
+    const entry = { endpoint: sub.endpoint, p256dh: keys.p256dh, auth: keys.auth, uid: user.uid,
+      tz: Intl.DateTimeFormat().resolvedOptions().timeZone, at: Date.now() };
+    (shared.pushSubs ??= {})[key] = entry; // apply locally first, like updateTabField
+    await updateDoc(patientRef, new FieldPath("pushSubs", key), entry, new FieldPath("pushChangedAt"), serverTimestamp());
+  } catch (err) {
+    reportError(err);
+  }
+  renderPush();
+});
+
+els.pushOff.addEventListener("click", async () => {
+  const sub = await currentPushSub();
+  if (sub) {
+    const key = await subKeyOf(sub.endpoint);
+    delete shared.pushSubs?.[key];
+    // The browser subscription stays: this phone may still get another patient's reminders
+    updateDoc(patientRef, new FieldPath("pushSubs", key), deleteField(), new FieldPath("pushChangedAt"), serverTimestamp())
+      .catch(reportError);
+  }
+  renderPush();
+});
+
+els.pushTest.addEventListener("click", async () => {
+  (await navigator.serviceWorker.ready).showNotification("Medicine Tracker",
+    { body: "Test — dose reminders will look like this.", icon: "icons/icon-192.png" });
+});
+
+function pushKeyBytes() {
+  const b64 = PUSH_PUBLIC_KEY.replaceAll("-", "+").replaceAll("_", "/");
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 }
 
 // ---------- Init ----------

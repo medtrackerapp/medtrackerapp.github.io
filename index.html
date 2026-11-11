@@ -372,6 +372,17 @@
         </div>
       </section>
 
+      <!-- Closed-app dose reminders (web push; sent by worker/, saved per phone and patient) -->
+      <section class="field">
+        <span class="field-label">Reminders on this phone</span>
+        <p id="push-text" class="info-text"></p>
+        <button id="push-on" type="button" class="primary hidden">Turn on</button>
+        <div id="push-actions" class="dialog-actions hidden">
+          <button id="push-test" type="button" class="ghost">Test</button>
+          <button id="push-off" type="button" class="ghost">Turn off</button>
+        </div>
+      </section>
+
       <section class="field settings-account">
         <span class="field-label">Signed in as</span>
         <p id="settings-account" class="info-text"></p>

@@ -15,6 +15,10 @@ playwright-report/
 # Firebase emulator logs
 *-debug.log
 
+# Worker secrets (VAPID private key, test key), local only; set in Cloudflare with wrangler secret
+worker/.dev.vars
+worker/.wrangler/
+
 # Service account key and the users table (cleanup/list-users.js), local only
 cleanup/*.json
 !cleanup/package.json

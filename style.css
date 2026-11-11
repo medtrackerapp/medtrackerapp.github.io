@@ -1669,9 +1669,9 @@ main { max-width: 640px; margin: 0 auto; padding: 16px 16px max(110px, calc(env(
 .pick-where:empty { display: none; }
 
 /* ---------- Settings and Theme screens ---------- */
-/* Sign out sits at the bottom of Settings, however little is above it */
-.settings-inner { min-height: 100%; grid-template-rows: auto auto 1fr; }
-.settings-account { align-self: end; }
+/* Sign out sits at the bottom of Settings, however many sections sit above it */
+.settings-inner { display: flex; flex-direction: column; min-height: 100%; }
+.settings-account { margin-top: auto; }
 .row-chevron { flex-shrink: 0; margin-left: auto; display: grid; color: var(--muted); }
 /* A list card's own heading and hint line up with the fields above it */
 .list-card > .field-label { margin: 0; padding: 0 4px; }

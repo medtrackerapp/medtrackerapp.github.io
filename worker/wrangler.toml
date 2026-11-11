@@ -1,0 +1,21 @@
+# Cloudflare Worker that sends dose reminders while the app is closed. See README.md for setup.
+name = "medtracker-push"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+
+[triggers]
+crons = ["* * * * *"] # every minute: fire due reminders; the Firestore mirror refreshes itself
+
+[[kv_namespaces]]
+binding = "PUSH"
+id = "c27298271e8f4b6cbafa5832480c3646" # from: npx wrangler kv namespace create PUSH
+
+[vars]
+FIREBASE_PROJECT_ID = "medicine-tracker-c59e7"
+# Public half of the VAPID pair; PUSH_PUBLIC_KEY in app.js must stay identical
+VAPID_PUBLIC = "BMT0v_1gKJCxGOoKQBlG77VHOu0kWfM_rE_RRp09fKJX64eK3RNZHkbRa7uwFYSjOF8WwC7wQbrzF92lt6b2lms"
+
+# Secrets (npx wrangler secret put <name>; locally in .dev.vars, never in git):
+#   FIREBASE_SERVICE_ACCOUNT  the service-account key JSON (same value as the GitHub secret)
+#   VAPID_PRIVATE_JWK         private half of the VAPID pair (worker/.dev.vars has it)
+#   TEST_KEY                  any random string; guards POST /test
